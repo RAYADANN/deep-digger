@@ -147,6 +147,7 @@ function MiningEngine:hitBlock(player, playerData, x, z, y, isCrit)
     end
     self.onOreMined:fire(player, oreDef, block.depth)
 
+    local roomRarity = nil
     -- Комната (15% шанс)
     if oreDef and math.random() <= 0.15 + playerData.depth * 0.00002 then
         local steps = 4 + math.random(0, 6)
@@ -175,10 +176,11 @@ function MiningEngine:hitBlock(player, playerData, x, z, y, isCrit)
             local nri = math.min(#rarities, ri + 1 + math.random(0, 2))
             for _, o in ipairs(pool) do if o.rarity == rarities[nri] then ro = o; break end end
             blocks[ek] = { oreId = ro.id, hp = ro.hp*(3+math.random(0,3)), maxHp = ro.hp*(3+math.random(0,3)), depth = block.depth }
+            roomRarity = ro.rarity
         end
     end
 
-    return { success = true, mined = true, oreDef = oreDef, damage = dmg, crit = isCrit }
+    return { success = true, mined = true, oreDef = oreDef, damage = dmg, crit = isCrit, roomRarity = roomRarity }
 end
 
 function MiningEngine:resetPlayer(player)

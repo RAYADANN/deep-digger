@@ -208,6 +208,39 @@ function MiningRenderer:_dmgNumber(key, dmg, crit)
     end)
 end
 
+function MiningRenderer:_showNotification(text, color)
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "RoomNotif"
+    gui.Parent = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui")
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.fromOffset(360, 70)
+    frame.Position = UDim2.new(0.5, -180, 0.1, 0)
+    frame.BackgroundColor3 = Color3.fromRGB(10, 10, 30)
+    frame.BackgroundTransparency = 0.2
+    frame.BorderSizePixel = 2
+    frame.BorderColor3 = color or Color3.fromRGB(180, 130, 255)
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 12)
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.fromScale(1, 1)
+    label.BackgroundTransparency = 1
+    label.Text = text
+    label.Font = Enum.Font.GothamBold
+    label.TextSize = 22
+    label.TextColor3 = Color3.new(1, 1, 1)
+    label.TextStrokeTransparency = 0.3
+    label.TextStrokeColor3 = Color3.new(0, 0, 0)
+    label.Parent = frame
+    -- Анимация: появление сверху, задержка, исчезновение
+    frame.Position = UDim2.new(0.5, -180, -0.1, 0)
+    local tweenIn = game:GetService("TweenService"):Create(frame, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Position = UDim2.new(0.5, -180, 0.1, 0) })
+    tweenIn:Play()
+    task.delay(2.5, function()
+        local tweenOut = game:GetService("TweenService"):Create(frame, TweenInfo.new(0.3, Enum.EasingStyle.Quint), { Position = UDim2.new(0.5, -180, -0.15, 0) })
+        tweenOut:Play()
+        task.delay(0.35, function() gui:Destroy() end)
+    end)
+end
+
 function MiningRenderer:_onClick(key, x, z, y)
     local ok, res = pcall(function() return Net:Invoke("MineBlock", { { x = x, z = z, y = y } }) end)
     if not ok or not res then return end
@@ -218,6 +251,12 @@ function MiningRenderer:_onClick(key, x, z, y)
     end
     if r.mined then self:_animateDestroy(key)
     elseif r.remainingHp then self:_updateVisual(key, r.remainingHp) end
+    -- Уведомление о комнате
+    if r.roomRarity then
+        local rarText = r.roomRarity:sub(1,1):upper() .. r.roomRarity:sub(2)
+        local rarColors = { common = Color3.fromRGB(180,180,180), uncommon = Color3.fromRGB(100,200,100), rare = Color3.fromRGB(60,140,255), epic = Color3.fromRGB(180,60,220), legendary = Color3.fromRGB(255,160,0), mythic = Color3.fromRGB(255,50,50) }
+        self:_showNotification("🏠 Hidden Room! Contains " .. rarText .. " ore!", rarColors[r.roomRarity] or Color3.fromRGB(180,130,255))
+    end
 end
 
 function MiningRenderer:syncBlocks(blocks)

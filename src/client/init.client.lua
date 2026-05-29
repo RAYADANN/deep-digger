@@ -4,14 +4,23 @@
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local shared = ReplicatedStorage:WaitForChild("shared")
+local modules = ReplicatedStorage:WaitForChild("Packages")
 
 local Logger = require(shared.util.Logger)
 local MiningRenderer = require(script.core.MiningRenderer)
+local HUD = require(script.ui.HUD)
+local Net = require(modules.Net)
 
 local log = Logger.new("Client:Init")
 
--- Создаём рендер
+-- Создаём рендер и HUD
 local renderer = MiningRenderer.new()
+local hud = HUD.new()
+
+-- Слушаем статы с сервера
+Net:Connect("PlayerStats", function(data)
+    hud:update(data)
+end)
 
 -- Запускаем, когда персонаж появляется
 local Players = game:GetService("Players")
@@ -20,6 +29,7 @@ local player = Players.LocalPlayer
 local function onCharacterAdded(character: Model)
     log:info("Character spawned, starting mining renderer")
     renderer:start()
+    hud:create()
 end
 
 if player.Character then
@@ -31,6 +41,7 @@ player.CharacterAdded:Connect(onCharacterAdded)
 player.AncestryChanged:Connect(function()
     if player.Parent == nil then
         renderer:stop()
+        hud:destroy()
     end
 end)
 

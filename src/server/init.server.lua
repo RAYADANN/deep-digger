@@ -26,8 +26,9 @@ local economyManager = EconomyManager.new(miningEngine)
 local antiCheat = AntiCheat.new()
 local leaderboard = Leaderboard.new()
 
--- RemoteEvent для синхронизации сервер → клиент
+-- RemoteEvents для клиента
 local remoteSync = Net:RemoteEvent("SyncBlocks")
+local remoteStats = Net:RemoteEvent("PlayerStats")
 
 --[[
     Отправить клиенту все блоки из загруженных чанков.
@@ -38,6 +39,17 @@ local function syncVisibleBlocks(player: Player)
 
     local blocks = miningEngine:getVisibleBlocks(player, playerData)
     remoteSync:FireClient(player, blocks)
+end
+
+local function syncStats(player: Player)
+    local playerData = profileManager:getData(player)
+    if not playerData then return end
+    remoteStats:FireClient(player, {
+        coins = playerData.coins,
+        depth = playerData.depth,
+        pickaxeLevel = playerData.pickaxeLevel,
+        speedLevel = playerData.speedLevel,
+    })
 end
 
 --[[
@@ -75,6 +87,7 @@ Net:Handle("MineBlock", function(player: Player, clicks: { { x: number, z: numbe
     -- Синхронизируем чанки (загрузка/выгрузка) + отправляем клиенту
     if blocksChanged then
         syncVisibleBlocks(player)
+        syncStats(player)
     end
 
     return results
@@ -97,7 +110,10 @@ local function onPlayerAdded(player: Player)
     -- 3. Загружаем чанки и синхронизируем
     syncVisibleBlocks(player)
 
-    -- 4. Автосохранение
+    -- 4. Отправляем статы на HUD
+    syncStats(player)
+
+    -- 5. Автосохранение
     task.spawn(function()
         while player.Parent do
             task.wait(Constants.AUTOSAVE_INTERVAL)
