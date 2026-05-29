@@ -5,7 +5,6 @@ local modules = game:GetService("ReplicatedStorage"):WaitForChild("Packages")
 local Fusion = require(modules.Fusion)
 local scope = Fusion.scoped(Fusion)
 local player = game:GetService("Players").LocalPlayer
--- Специальные ключи Fusion (не требуют scope)
 local OnEvent = Fusion.OnEvent
 local Children = Fusion.Children
 
@@ -34,6 +33,55 @@ function HUD.new()
     return self
 end
 
+-- Вспомогательная функция: иконка + реактивный текст
+local function statLine(icon, valueObj, suffix, color)
+    return scope:New("Frame")({
+        Size = UDim2.fromOffset(130, 36),
+        BackgroundTransparency = 1,
+        [Children] = {
+            scope:New("TextLabel")({
+                Size = UDim2.fromOffset(24, 36), BackgroundTransparency = 1,
+                Text = icon, TextSize = 18,
+            }),
+            scope:New("TextLabel")({
+                Position = UDim2.fromOffset(24, 0),
+                Size = UDim2.new(1, -24, 1, 0), BackgroundTransparency = 1,
+                Text = scope:Computed(function(use)
+                    return fmt(use(valueObj)) .. (suffix or "")
+                end),
+                Font = Enum.Font.GothamBold, TextSize = 18,
+                TextColor3 = color or COLORS.text,
+                TextStrokeTransparency = 0.3, TextStrokeColor3 = Color3.new(0,0,0),
+                TextXAlignment = Enum.TextXAlignment.Left,
+            }),
+        },
+    })
+end
+
+local function statLevel(icon, valueObj, color)
+    return scope:New("Frame")({
+        Size = UDim2.fromOffset(110, 36),
+        BackgroundTransparency = 1,
+        [Children] = {
+            scope:New("TextLabel")({
+                Size = UDim2.fromOffset(24, 36), BackgroundTransparency = 1,
+                Text = icon, TextSize = 18,
+            }),
+            scope:New("TextLabel")({
+                Position = UDim2.fromOffset(24, 0),
+                Size = UDim2.new(1, -24, 1, 0), BackgroundTransparency = 1,
+                Text = scope:Computed(function(use)
+                    return "Lv." .. use(valueObj)
+                end),
+                Font = Enum.Font.GothamBold, TextSize = 18,
+                TextColor3 = color or COLORS.text,
+                TextStrokeTransparency = 0.3, TextStrokeColor3 = Color3.new(0,0,0),
+                TextXAlignment = Enum.TextXAlignment.Left,
+            }),
+        },
+    })
+end
+
 function HUD:create()
     if self._created then return end
     self._created = true
@@ -43,7 +91,6 @@ function HUD:create()
         Parent = player:WaitForChild("PlayerGui"),
         ResetOnSpawn = false,
         [Children] = {
-            -- Верхняя панель
             scope:New("Frame")({
                 Size = UDim2.new(1, 0, 0, 56),
                 BackgroundColor3 = COLORS.bg, BackgroundTransparency = 0.15,
@@ -56,105 +103,20 @@ function HUD:create()
                         BackgroundColor3 = COLORS.accent, BackgroundTransparency = 0.5,
                         BorderSizePixel = 0,
                     }),
-                    -- Блоки статистики
+                    -- Статы
                     scope:New("Frame")({
                         Size = UDim2.new(1, -40, 1, 0),
                         Position = UDim2.fromOffset(20, 0),
                         BackgroundTransparency = 1,
                         [Children] = {
-                            -- Монеты
-                            scope:New("Frame")({
-                                Size = UDim2.fromOffset(140, 36),
-                                BackgroundTransparency = 1,
-                                [Children] = {
-                                    scope:New("TextLabel")({
-                                        Size = UDim2.fromOffset(24, 36), BackgroundTransparency = 1,
-                                        Text = "🪙", TextSize = 18,
-                                    }),
-                                    scope:New("TextLabel")({
-                                        Position = UDim2.fromOffset(24, 0),
-                                        Size = UDim2.new(1, -24, 1, 0), BackgroundTransparency = 1,
-                                        Text = scope:Computed(function()
-                                            return fmt(self._coins:get())
-                                        end),
-                                        Font = Enum.Font.GothamBold, TextSize = 18,
-                                        TextColor3 = COLORS.gold,
-                                        TextStrokeTransparency = 0.3, TextStrokeColor3 = Color3.new(0,0,0),
-                                        TextXAlignment = Enum.TextXAlignment.Left,
-                                    }),
-                                },
-                            }),
-                            -- Глубина
-                            scope:New("Frame")({
-                                Size = UDim2.fromOffset(120, 36),
-                                BackgroundTransparency = 1,
-                                [Children] = {
-                                    scope:New("TextLabel")({
-                                        Size = UDim2.fromOffset(24, 36), BackgroundTransparency = 1,
-                                        Text = "📏", TextSize = 18,
-                                    }),
-                                    scope:New("TextLabel")({
-                                        Position = UDim2.fromOffset(24, 0),
-                                        Size = UDim2.new(1, -24, 1, 0), BackgroundTransparency = 1,
-                                        Text = scope:Computed(function()
-                                            return self._depth:get() .. "m"
-                                        end),
-                                        Font = Enum.Font.GothamBold, TextSize = 18,
-                                        TextColor3 = COLORS.text,
-                                        TextStrokeTransparency = 0.3, TextStrokeColor3 = Color3.new(0,0,0),
-                                        TextXAlignment = Enum.TextXAlignment.Left,
-                                    }),
-                                },
-                            }),
-                            -- Разделитель
+                            statLine("🪙", self._coins, "", COLORS.gold),
+                            statLine("📏", self._depth, "m", COLORS.text),
                             scope:New("Frame")({
                                 Size = UDim2.fromOffset(1, 24),
                                 BackgroundColor3 = COLORS.border, BorderSizePixel = 0,
                             }),
-                            -- Кирка
-                            scope:New("Frame")({
-                                Size = UDim2.fromOffset(110, 36),
-                                BackgroundTransparency = 1,
-                                [Children] = {
-                                    scope:New("TextLabel")({
-                                        Size = UDim2.fromOffset(24, 36), BackgroundTransparency = 1,
-                                        Text = "⛏", TextSize = 18,
-                                    }),
-                                    scope:New("TextLabel")({
-                                        Position = UDim2.fromOffset(24, 0),
-                                        Size = UDim2.new(1, -24, 1, 0), BackgroundTransparency = 1,
-                                        Text = scope:Computed(function()
-                                            return "Lv." .. self._pick:get()
-                                        end),
-                                        Font = Enum.Font.GothamBold, TextSize = 18,
-                                        TextColor3 = COLORS.accent,
-                                        TextStrokeTransparency = 0.3, TextStrokeColor3 = Color3.new(0,0,0),
-                                        TextXAlignment = Enum.TextXAlignment.Left,
-                                    }),
-                                },
-                            }),
-                            -- Скорость
-                            scope:New("Frame")({
-                                Size = UDim2.fromOffset(110, 36),
-                                BackgroundTransparency = 1,
-                                [Children] = {
-                                    scope:New("TextLabel")({
-                                        Size = UDim2.fromOffset(24, 36), BackgroundTransparency = 1,
-                                        Text = "⚡", TextSize = 18,
-                                    }),
-                                    scope:New("TextLabel")({
-                                        Position = UDim2.fromOffset(24, 0),
-                                        Size = UDim2.new(1, -24, 1, 0), BackgroundTransparency = 1,
-                                        Text = scope:Computed(function()
-                                            return "Lv." .. self._speed:get()
-                                        end),
-                                        Font = Enum.Font.GothamBold, TextSize = 18,
-                                        TextColor3 = COLORS.green,
-                                        TextStrokeTransparency = 0.3, TextStrokeColor3 = Color3.new(0,0,0),
-                                        TextXAlignment = Enum.TextXAlignment.Left,
-                                    }),
-                                },
-                            }),
+                            statLevel("⛏", self._pick, COLORS.accent),
+                            statLevel("⚡", self._speed, COLORS.green),
                         },
                     }),
                     -- Кнопка SELL
