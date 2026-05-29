@@ -1,0 +1,11 @@
+[package]
+name = "zeon/deep-digger"
+version = "0.1.0"
+realm = "shared"
+registry = "https://github.com/UpliftGames/wally-index"
+
+[dependencies]
+Net = "sleitnick/net@0.2.0"
+Fusion = "elttob/fusion@0.3.0"
+Promise = "evaera/promise@4.0.0"
+ProfileService = "brittonfischer/profileservice@2.1.5"

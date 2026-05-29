@@ -1,0 +1,14 @@
+{
+    "languageMode": "strict",
+    "lint": {
+        "allowGlobalNamespace": false,
+        "globalsAsReferenced": true
+    },
+    "typeCheckLevel": "Strict",
+    "typeRoact": "Fusion",
+    "aliases": {
+        "shared": "src/shared",
+        "server": "src/server",
+        "client": "src/client"
+    }
+}

@@ -1,0 +1,10 @@
+# OS
+Thumbs.db
+.DS_Store
+*.swo
+*.swp
+
+# Rojo
+*.rbxl
+*.rbxlx
+serve.log
