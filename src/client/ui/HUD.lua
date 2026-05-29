@@ -1,5 +1,5 @@
 --!strict
--- HUD.lua — современный профессиональный интерфейс (Fusion 0.3).
+-- HUD.lua — UI в стиле Infinite Mining Incremental (топ-игр Roblox)
 
 local modules = game:GetService("ReplicatedStorage"):WaitForChild("Packages")
 local Fusion = require(modules.Fusion)
@@ -11,16 +11,20 @@ local Children = Fusion.Children
 local HUD = {}
 HUD.__index = HUD
 
--- Палитра (тёмная тема, аккуратные акценты)
+-- Палитра как в топ Roblox mining играх
 local C = {
-    panel = Color3.fromRGB(10, 12, 22),
-    panelBorder = Color3.fromRGB(35, 40, 65),
-    gold = Color3.fromRGB(255, 200, 60),
-    cyan = Color3.fromRGB(60, 200, 255),
-    green = Color3.fromRGB(55, 220, 100),
+    panel = Color3.fromRGB(18, 20, 35),
+    panelBorder = Color3.fromRGB(40, 45, 70),
+    card = Color3.fromRGB(25, 28, 45),
+    gold = Color3.fromRGB(255, 195, 40),
+    cyan = Color3.fromRGB(50, 210, 255),
+    green = Color3.fromRGB(50, 220, 80),
+    red = Color3.fromRGB(230, 60, 60),
+    purple = Color3.fromRGB(160, 80, 255),
     text = Color3.fromRGB(220, 225, 235),
-    muted = Color3.fromRGB(100, 110, 130),
-    sellGreen = Color3.fromRGB(45, 185, 55),
+    muted = Color3.fromRGB(100, 110, 135),
+    btnSell = Color3.fromRGB(45, 190, 55),
+    white = Color3.new(1, 1, 1),
 }
 
 local function fmt(n)
@@ -39,34 +43,62 @@ function HUD.new()
     return self
 end
 
--- Один стат-блок
-local function statBlock(icon, valueObj, formatFn, color)
+-- Утилита: текст с тенью
+local function txt(overrides)
+    local props = {
+        Font = Enum.Font.GothamBold,
+        TextColor3 = C.text,
+        TextStrokeTransparency = 0.4,
+        TextStrokeColor3 = Color3.new(0, 0, 0),
+        BackgroundTransparency = 1,
+        Size = UDim2.fromScale(1, 1),
+    }
+    for k, v in pairs(overrides) do props[k] = v end
+    return scope:New("TextLabel")(props)
+end
+
+-- Блок-карточка для статов
+local function statCard(icon, valueObj, suffix, iconColor, valColor)
     return scope:New("Frame")({
-        Size = UDim2.fromOffset(140, 40),
-        BackgroundColor3 = Color3.fromRGB(15, 17, 28),
-        BackgroundTransparency = 0.3,
+        Size = UDim2.fromOffset(145, 42),
+        BackgroundColor3 = C.card,
+        BorderSizePixel = 1,
+        BorderColor3 = C.panelBorder,
+        [Children] = {
+            scope:New("UICorner")({CornerRadius = UDim.new(0, 10)}),
+            -- Иконка слева
+            txt({Text = icon, Size = UDim2.fromOffset(26, 42), TextSize = 16, Position = UDim2.fromOffset(8, 0)}),
+            -- Значение справа
+            txt({
+                Position = UDim2.fromOffset(38, 0),
+                Size = UDim2.new(1, -44, 1, 0),
+                Text = scope:Computed(function(use)
+                    local v = use(valueObj)
+                    return fmt(v) .. (suffix or "")
+                end),
+                TextSize = 18,
+                TextColor3 = valColor or C.white,
+                TextXAlignment = Enum.TextXAlignment.Left,
+            }),
+        },
+    })
+end
+
+-- Уровень (иконка + Lv.X)
+local function levelCard(icon, valueObj, color)
+    return scope:New("Frame")({
+        Size = UDim2.fromOffset(110, 34),
+        BackgroundColor3 = C.card,
         BorderSizePixel = 1,
         BorderColor3 = C.panelBorder,
         [Children] = {
             scope:New("UICorner")({CornerRadius = UDim.new(0, 8)}),
-            scope:New("TextLabel")({
-                Position = UDim2.fromOffset(10, 0),
-                Size = UDim2.fromOffset(22, 40),
-                BackgroundTransparency = 1,
-                Text = icon, TextSize = 16,
-            }),
-            scope:New("TextLabel")({
-                Position = UDim2.fromOffset(36, 0),
-                Size = UDim2.new(1, -42, 1, 0),
-                BackgroundTransparency = 1,
-                Text = scope:Computed(function(use)
-                    return formatFn and formatFn(use(valueObj)) or tostring(use(valueObj))
-                end),
-                Font = Enum.Font.GothamBold,
-                TextSize = 16,
-                TextColor3 = color or C.text,
-                TextStrokeTransparency = 0.5,
-                TextStrokeColor3 = Color3.new(0,0,0),
+            txt({Text = icon, Size = UDim2.fromOffset(22, 34), TextSize = 14, Position = UDim2.fromOffset(6, 0)}),
+            txt({
+                Position = UDim2.fromOffset(30, 0),
+                Size = UDim2.new(1, -34, 1, 0),
+                Text = scope:Computed(function(use) return "Lv." .. use(valueObj) end),
+                TextSize = 14, TextColor3 = color or C.white,
                 TextXAlignment = Enum.TextXAlignment.Left,
             }),
         },
@@ -82,154 +114,125 @@ function HUD:create()
         Parent = player:WaitForChild("PlayerGui"),
         ResetOnSpawn = false,
         [Children] = {
-            -- Верхняя панель — тёмное стекло
+            -- === ВЕРХНЯЯ ПАНЕЛЬ ===
             scope:New("Frame")({
-                Size = UDim2.new(1, 0, 0, 64),
+                Size = UDim2.new(1, 0, 0, 60),
                 BackgroundColor3 = C.panel,
-                BackgroundTransparency = 0.2,
+                BackgroundTransparency = 0.1,
                 BorderSizePixel = 0,
                 [Children] = {
-                    -- Нижнее свечение
+                    -- Нижняя линия-акцент
                     scope:New("Frame")({
-                        Size = UDim2.new(1, 0, 0, 2),
-                        Position = UDim2.new(0, 0, 1, -1),
+                        Size = UDim2.new(1, 0, 0, 1),
+                        Position = UDim2.new(0, 0, 1, 0),
                         BackgroundColor3 = C.cyan,
-                        BackgroundTransparency = 0.6,
+                        BackgroundTransparency = 0.7,
                         BorderSizePixel = 0,
                     }),
-                    -- Левый блок: лого + глубина
+                    -- Левая часть: лого + монеты + глубина
                     scope:New("Frame")({
-                        Size = UDim2.new(0.5, -20, 1, 0),
-                        Position = UDim2.fromOffset(20, 0),
+                        Size = UDim2.fromOffset(420, 60),
                         BackgroundTransparency = 1,
                         [Children] = {
-                            scope:New("TextLabel")({
-                                Position = UDim2.fromOffset(0, 8),
-                                Size = UDim2.fromOffset(160, 24),
-                                BackgroundTransparency = 1,
-                                Text = "⛏ DEEP DIGGER",
-                                Font = Enum.Font.GothamBlack,
-                                TextSize = 18,
-                                TextColor3 = C.text,
-                                TextStrokeTransparency = 0.5,
+                            -- Логотип
+                            txt({
+                                Position = UDim2.fromOffset(16, 6),
+                                Size = UDim2.fromOffset(140, 22),
+                                Text = "⛏️ DEEP DIGGER",
+                                TextSize = 16,
+                                TextColor3 = C.white,
                                 TextXAlignment = Enum.TextXAlignment.Left,
                             }),
+                            -- Строка со статами
                             scope:New("Frame")({
-                                Position = UDim2.fromOffset(0, 36),
-                                Size = UDim2.new(1, 0, 0, 22),
+                                Position = UDim2.fromOffset(16, 30),
+                                Size = UDim2.fromOffset(400, 26),
                                 BackgroundTransparency = 1,
                                 [Children] = {
                                     -- 🪙
-                                    scope:New("TextLabel")({
-                                        Position = UDim2.fromOffset(0, 0),
-                                        Size = UDim2.fromOffset(16, 22),
-                                        BackgroundTransparency = 1,
-                                        Text = "🪙", TextSize = 14,
+                                    txt({
+                                        Size = UDim2.fromOffset(18, 26), TextSize = 14,
+                                        Text = "🪙",
                                     }),
-                                    scope:New("TextLabel")({
-                                        Position = UDim2.fromOffset(18, 0),
-                                        Size = UDim2.fromOffset(90, 22),
-                                        BackgroundTransparency = 1,
+                                    txt({
+                                        Position = UDim2.fromOffset(20, 0),
+                                        Size = UDim2.fromOffset(90, 26),
                                         Text = scope:Computed(function(use)
                                             return fmt(use(self._coins))
                                         end),
-                                        Font = Enum.Font.GothamBold,
-                                        TextSize = 16,
-                                        TextColor3 = C.gold,
-                                        TextStrokeTransparency = 0.4,
+                                        TextSize = 16, TextColor3 = C.gold,
                                         TextXAlignment = Enum.TextXAlignment.Left,
                                     }),
-                                    -- 📏
-                                    scope:New("TextLabel")({
-                                        Position = UDim2.fromOffset(110, 0),
-                                        Size = UDim2.fromOffset(16, 22),
-                                        BackgroundTransparency = 1,
-                                        Text = "📏", TextSize = 14,
+                                    -- 📏 разделитель
+                                    txt({
+                                        Position = UDim2.fromOffset(115, 0),
+                                        Size = UDim2.fromOffset(14, 26),
+                                        Text = "|", TextSize = 14, TextColor3 = C.muted,
                                     }),
-                                    scope:New("TextLabel")({
-                                        Position = UDim2.fromOffset(128, 0),
-                                        Size = UDim2.fromOffset(100, 22),
-                                        BackgroundTransparency = 1,
+                                    -- 📏
+                                    txt({
+                                        Position = UDim2.fromOffset(130, 0),
+                                        Size = UDim2.fromOffset(18, 26), TextSize = 14,
+                                        Text = "📏",
+                                    }),
+                                    txt({
+                                        Position = UDim2.fromOffset(150, 0),
+                                        Size = UDim2.fromOffset(100, 26),
                                         Text = scope:Computed(function(use)
                                             return use(self._depth) .. "m"
                                         end),
-                                        Font = Enum.Font.GothamBold,
-                                        TextSize = 14,
-                                        TextColor3 = C.text,
-                                        TextStrokeTransparency = 0.4,
+                                        TextSize = 16, TextColor3 = C.text,
                                         TextXAlignment = Enum.TextXAlignment.Left,
                                     }),
                                 },
                             }),
                         },
                     }),
-                    -- Правый блок: статы + SELL
+                    -- Правая часть: уровни + кнопка SELL
                     scope:New("Frame")({
                         Size = UDim2.new(0.5, -20, 1, 0),
                         Position = UDim2.new(1, -20, 0, 0),
                         BackgroundTransparency = 1,
                         [Children] = {
-                            -- Уровни
+                            -- уровни
                             scope:New("Frame")({
-                                Size = UDim2.fromOffset(200, 40),
-                                Position = UDim2.new(1, -340, 0, 12),
+                                Position = UDim2.new(1, -280, 0, 0),
+                                Size = UDim2.fromOffset(240, 60),
                                 BackgroundTransparency = 1,
                                 [Children] = {
-                                    scope:New("TextLabel")({
-                                        Position = UDim2.fromOffset(0, 0),
-                                        Size = UDim2.fromOffset(90, 20),
+                                    levelCard("⛏", self._pick, C.cyan),
+                                    scope:New("Frame")({
+                                        Position = UDim2.fromOffset(0, 28),
                                         BackgroundTransparency = 1,
-                                        Text = scope:Computed(function(use)
-                                            return "⛏ Lv." .. use(self._pick)
-                                        end),
-                                        Font = Enum.Font.GothamBold,
-                                        TextSize = 14,
-                                        TextColor3 = C.cyan,
-                                        TextStrokeTransparency = 0.4,
-                                        TextXAlignment = Enum.TextXAlignment.Left,
-                                    }),
-                                    scope:New("TextLabel")({
-                                        Position = UDim2.fromOffset(100, 0),
-                                        Size = UDim2.fromOffset(100, 20),
-                                        BackgroundTransparency = 1,
-                                        Text = scope:Computed(function(use)
-                                            return "⚡ Lv." .. use(self._speed)
-                                        end),
-                                        Font = Enum.Font.GothamBold,
-                                        TextSize = 14,
-                                        TextColor3 = C.green,
-                                        TextStrokeTransparency = 0.4,
-                                        TextXAlignment = Enum.TextXAlignment.Left,
+                                        Size = UDim2.fromOffset(110, 34),
+                                        [Children] = {
+                                            levelCard("⚡", self._speed, C.green),
+                                        },
                                     }),
                                 },
                             }),
                             -- SELL
                             scope:New("ImageButton")({
-                                Size = UDim2.fromOffset(120, 40),
-                                Position = UDim2.new(1, -130, 0, 12),
-                                BackgroundColor3 = C.sellGreen,
-                                BackgroundTransparency = 0.15,
+                                Size = UDim2.fromOffset(125, 40),
+                                Position = UDim2.new(1, -135, 0, 10),
+                                BackgroundColor3 = C.btnSell,
+                                BackgroundTransparency = 0.1,
                                 BorderSizePixel = 0,
                                 [Children] = {
                                     scope:New("UICorner")({CornerRadius = UDim.new(0, 10)}),
-                                    scope:New("TextLabel")({
-                                        Size = UDim2.fromScale(1, 1),
-                                        BackgroundTransparency = 1,
-                                        Text = "💰 SELL",
-                                        Font = Enum.Font.GothamBold,
-                                        TextSize = 15,
-                                        TextColor3 = Color3.new(1,1,1),
-                                        TextStrokeTransparency = 0.3,
+                                    txt({
+                                        Text = "💰 SELL", TextSize = 16, TextColor3 = C.white,
+                                        Font = Enum.Font.GothamBlack,
                                     }),
                                 },
                                 [OnEvent("MouseButton1Click")] = function() print("Sell!") end,
                                 [OnEvent("MouseEnter")] = function(s)
                                     s.BackgroundColor3 = Color3.fromRGB(55,210,65)
-                                    s:TweenSize(UDim2.fromOffset(124, 42), Enum.EasingDirection.Out, Enum.EasingStyle.Quint, 0.15, true)
+                                    s:TweenSize(UDim2.fromOffset(129, 42), nil, nil, 0.12, true)
                                 end,
                                 [OnEvent("MouseLeave")] = function(s)
-                                    s.BackgroundColor3 = C.sellGreen
-                                    s:TweenSize(UDim2.fromOffset(120, 40), Enum.EasingDirection.Out, Enum.EasingStyle.Quint, 0.15, true)
+                                    s.BackgroundColor3 = C.btnSell
+                                    s:TweenSize(UDim2.fromOffset(125, 40), nil, nil, 0.12, true)
                                 end,
                             }),
                         },
