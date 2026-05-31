@@ -12,24 +12,32 @@ local HUD = require(script.ui.HUD)
 local Net = require(modules.Net)
 
 local log = Logger.new("Client:Init")
-
--- Создаём рендер и HUD
-local renderer = MiningRenderer.new()
-local hud = HUD.new()
-
--- Слушаем статы с сервера
-Net:Connect("PlayerStats", function(data)
-    hud:update(data)
-end)
-
--- Запускаем, когда персонаж появляется
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
 
+-- Создаём рендер и HUD
+local renderer = MiningRenderer.new()
+local hud: HUD? = nil
+
+-- Слушаем статы с сервера
+Net:Connect("PlayerStats", function(data)
+    if not hud then return end
+    hud:setCoins(data.coins or 0)
+    hud:setGems(data.gems or 0)
+    hud:setDepth(data.depth or 0, data.layer or "Dirt Layer")
+end)
+
+Net:Connect("PlayerInventory", function(data)
+    if not hud then return end
+    hud:setInventory(data.inventory or {})
+    hud:setUpgrades(data.upgrades or {})
+end)
+
+-- Запускаем, когда персонаж появляется
 local function onCharacterAdded(character: Model)
     log:info("Character spawned, starting mining renderer")
     renderer:start()
-    hud:create()
+    hud = HUD.new(player)
 end
 
 if player.Character then
@@ -41,7 +49,7 @@ player.CharacterAdded:Connect(onCharacterAdded)
 player.AncestryChanged:Connect(function()
     if player.Parent == nil then
         renderer:stop()
-        hud:destroy()
+        if hud then hud:destroy(); hud = nil end
     end
 end)
 

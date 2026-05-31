@@ -29,6 +29,7 @@ local leaderboard = Leaderboard.new()
 -- RemoteEvents для клиента
 local remoteSync = Net:RemoteEvent("SyncBlocks")
 local remoteStats = Net:RemoteEvent("PlayerStats")
+local remoteInv = Net:RemoteEvent("PlayerInventory")
 
 --[[
     Отправить клиенту все блоки из загруженных чанков.
@@ -41,14 +42,37 @@ local function syncVisibleBlocks(player: Player)
     remoteSync:FireClient(player, blocks)
 end
 
+local function layerName(layerId: string): string
+    for _, l in ipairs(Constants.LAYERS) do
+        if l.id == layerId then return l.name end
+    end
+    return layerId
+end
+
 local function syncStats(player: Player)
     local playerData = profileManager:getData(player)
     if not playerData then return end
     remoteStats:FireClient(player, {
         coins = playerData.coins,
+        gems = playerData.gems or 0,
         depth = playerData.depth,
-        pickaxeLevel = playerData.pickaxeLevel,
-        speedLevel = playerData.speedLevel,
+        layer = layerName(playerData.layer or "dirt"),
+    })
+end
+
+local function syncInventory(player: Player)
+    local playerData = profileManager:getData(player)
+    if not playerData then return end
+    -- Преобразуем инвентарь в массив { oreId, count }
+    local invList = {}
+    for oreId, count in pairs(playerData.inventory or {}) do
+        if count > 0 then
+            table.insert(invList, { oreId = oreId, count = count })
+        end
+    end
+    remoteInv:FireClient(player, {
+        inventory = invList,
+        upgrades = playerData,
     })
 end
 
@@ -88,6 +112,7 @@ Net:Handle("MineBlock", function(player: Player, clicks: { { x: number, z: numbe
     if blocksChanged then
         syncVisibleBlocks(player)
         syncStats(player)
+        syncInventory(player)
     end
 
     return results
@@ -112,6 +137,7 @@ local function onPlayerAdded(player: Player)
 
     -- 4. Отправляем статы на HUD
     syncStats(player)
+    syncInventory(player)
 
     -- 5. Автосохранение
     task.spawn(function()
