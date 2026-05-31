@@ -5,6 +5,7 @@ local shared = game:GetService("ReplicatedStorage"):WaitForChild("shared")
 local modules = game:GetService("ReplicatedStorage"):WaitForChild("Packages")
 local Logger = require(shared.util.Logger)
 local Constants = require(shared.constants)
+local UpgradeLogic = require(shared.util.UpgradeLogic)
 local Net = require(modules.Net)
 
 local MiningRenderer = {}
@@ -47,8 +48,14 @@ function MiningRenderer.new()
     local self = setmetatable({}, MiningRenderer)
     self._parts = {}; self._blockData = {}; self._parent = nil; self._enabled = false
     self._showRarity = false; self._showHPBar = true
+    self._lastSwingAt = 0
+    self._swingDelay = UpgradeLogic.swingDelaySeconds(1)
     self._log = Logger.new("MiningRenderer")
     return self
+end
+
+function MiningRenderer:setSwingDelay(speedLevel: number)
+    self._swingDelay = UpgradeLogic.swingDelaySeconds(speedLevel)
 end
 
 function MiningRenderer:_folder()
@@ -242,6 +249,12 @@ function MiningRenderer:_showNotification(text, color)
 end
 
 function MiningRenderer:_onClick(key, x, z, y)
+    local now = os.clock()
+    if now - self._lastSwingAt < self._swingDelay * 0.95 then
+        return
+    end
+    self._lastSwingAt = now
+
     local ok, res = pcall(function() return Net:Invoke("MineBlock", { { x = x, z = z, y = y } }) end)
     if not ok or not res then return end
     local r = res[1]; if not r or not r.success then return end

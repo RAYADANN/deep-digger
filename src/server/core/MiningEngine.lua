@@ -8,6 +8,7 @@ local Signal = require(shared.util.Signal)
 local Logger = require(shared.util.Logger)
 local Constants = require(shared.constants)
 local OreTypes = require(shared.types.OreTypes)
+local UpgradeLogic = require(shared.util.UpgradeLogic)
 
 local MiningEngine = {}
 MiningEngine.__index = MiningEngine
@@ -117,7 +118,7 @@ end
 --[[
     Ударить блок. Сломал → генерируем соседей = никаких дыр.
 ]]
-function MiningEngine:hitBlock(player, playerData, x, z, y, isCrit)
+function MiningEngine:hitBlock(player, playerData, x, z, y, isCrit: boolean?)
     local uid = player.UserId
     if not self._blocks[uid] then self._blocks[uid] = {}; self._air[uid] = {} end
     local blocks, air = self._blocks[uid], self._air[uid]
@@ -125,8 +126,12 @@ function MiningEngine:hitBlock(player, playerData, x, z, y, isCrit)
     local block = blocks[k]
     if not block then return { success = false, error = "Block not found" } end
 
-    local power = 1 + (playerData.pickaxeLevel - 1) * 2
-    local dmg = isCrit and (power * 3) or power
+    if isCrit == nil then
+        isCrit = math.random() < UpgradeLogic.critChance(playerData.critLevel or 1)
+    end
+
+    local power = UpgradeLogic.pickaxePower(playerData.pickaxeLevel or 1)
+    local dmg = if isCrit then power * 3 else power
     block.hp -= dmg
     if block.hp > 0 then
         return { success = true, mined = false, damage = dmg, crit = isCrit, remainingHp = block.hp }
@@ -141,15 +146,12 @@ function MiningEngine:hitBlock(player, playerData, x, z, y, isCrit)
     self:_revealNeighbors(uid, x, z, y)
 
     if oreDef then
-        playerData.depth += math.ceil(oreDef.hp / 10)
-        playerData.layer = self:_layer(math.floor(playerData.depth))
-        playerData.totalBlocksMined += 1
+        playerData.layer = self:_layer(block.depth)
     end
     self.onOreMined:fire(player, oreDef, block.depth)
 
     local roomRarity = nil
-    -- Комната (15% шанс)
-    if oreDef and math.random() <= 0.15 + playerData.depth * 0.00002 then
+    if oreDef and math.random() <= 0.15 + block.depth * 0.00002 then
         local steps = 4 + math.random(0, 6)
         local cx, cz, cy = x, z, y
         local minY = math.max(0, y - 1)

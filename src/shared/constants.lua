@@ -31,17 +31,19 @@ Constants.SHAFT_PERMANENT_BONUS = 0.005
 
 Constants.UPGRADES = {
     pickaxe = { baseCost = 50, exponent = 1.5, maxLevel = 100, powerPerLevel = 2 },
-    speed = { baseCost = 100, exponent = 1.3, maxLevel = 50, reductionMs = 20 },
+    speed = { baseCost = 100, exponent = 1.3, maxLevel = 50, reductionMs = 35 },
     fortune = { baseCost = 500, exponent = 1.6, maxLevel = 30, chancePerLevel = 0.02 },
     inventory = { baseCost = 150, exponent = 1.4, maxLevel = 20, slotsPerLevel = 5 },
-    crit = { baseCost = 400, exponent = 1.6, maxLevel = 15, chancePerLevel = 0.01 },
+    crit = { baseCost = 400, exponent = 1.6, maxLevel = 15, chancePerLevel = 0.03, baseChance = 0.05 },
     multiSell = { baseCost = 800, exponent = 1.8, maxLevel = 10, bonusPerLevel = 0.05 },
     autoSell = { baseCost = 5000, maxLevel = 1 },
 }
 
 Constants.BASE_INVENTORY_SLOTS = 10
-Constants.BASE_SWING_DELAY_MS = 1000
-Constants.MAX_CLICKS_PER_SECOND = 15
+Constants.BASE_SWING_DELAY_MS = 400
+Constants.MIN_SWING_DELAY_SECONDS = 0.05
+Constants.MAX_CLICKS_PER_SECOND = 20
+Constants.MAX_MINE_BATCH_SIZE = 16
 Constants.AUTOSAVE_INTERVAL = 60
 
 return Constants
