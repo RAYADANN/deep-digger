@@ -1,122 +1,97 @@
 # STATUS.md — Deep Digger 🪨
 
 > Состояние проекта, заглушки и планы.
-> Обновлено: 2026-05-29
-
-### Последнее (29.05)
-- Блок 4.5 студа
-- Hover: PointLight (свечение) + золотая рамка по граням
-- Разрушение: Tween-сжатие + проваливание (0.25 сек)
-- Частицы при каждом ударе
-- Атмосферная пыль в шахте
-- Спарклы на epic+ рудах
-- Damage Number: scale-up + bounce
-- HP бар: rounded corners, Tween-заполнение
+> Обновлено: 2026-05-31
 
 ---
 
 ## 🏗 Архитектура
 
 ```
-Поверхность: 15×15×10 (2250 блоков, Y=0..9)
-Шахта:      чанки 5×5×5 (125 блоков) при углублении, по центру копания
-Блок:       3×3×3 студа, CanCollide=true
-Чанки:      ленивая генерация, всё старьё остаётся (дырки)
-Глубина:    прогресс-метры, не сдвигает видимые блоки
+Движок:     Neighbor Reveal — блоки генерируются при разрушении соседних
+Поверхность: 15×15×10 (2250 блоков) при старте
+Расширение:  бесконечное по X, Z, Y (6 направлений по 3D-граням)
+Блок:       4.5×4.5×4.5 студа, CanCollide = true
+Позиция:    Z=30 перед игроком, Y=0 на уровне ног
 Ключи:      "x_z_y"
+UI:         Fusion 0.3 (scope: Value, New, Computed, OnEvent)
 ```
 
 ---
 
 ## ✅ Готово
 
-### Сервер
+### Сервер (6 файлов)
 | Файл | Что делает |
 |------|------------|
-| `init.server.lua` | Точка входа, загрузка профиля, синхронизация чанков, MineBlock |
-| `core/MiningEngine.lua` | Чанки 15×15×10 + 5×5×5, _mined, _mineCenter, слои, шахты, дроп |
-| `core/OreDatabase.lua` | 13 руд (6 Dirt + 7 Stone) с редкостью |
-| `core/ProfileManager.lua` | ProfileService: загрузка/автосохранение/релиз |
+| `init.server.lua` | Точка входа, обработка кликов, синхронизация блоков + статов |
+| `core/MiningEngine.lua` | Neighbor Reveal, поверхность, комнаты (15% шанс) |
+| `core/OreDatabase.lua` | 31 руда, 7 слоёв (Dirt → Void) |
+| `core/ProfileManager.lua` | ProfileService, автосохранение, данные игрока |
 | `core/AntiCheat.lua` | Лимит 15 кликов/сек |
+| `core/EconomyManager.lua` | 🟠 **Заглушка** — buyUpgrade/sellAll "Not implemented" |
 
-### Клиент
+### Клиент (4 файла)
 | Файл | Что делает |
 |------|------------|
-| `init.client.lua` | Точка входа, запуск рендера, чат-команды (/rarity, /hpbar, /help) |
-| `core/MiningRenderer.lua` | 3D-блоки, CanCollide, ClickDetector, HP бар при hover, Damage Numbers, rarity tags, hover-подсветка |
+| `init.client.lua` | Точка входа, рендер + HUD + PlayerStats |
+| `core/MiningRenderer.lua` | 3D-блоки, HP bar, hover, частицы, уведомления о комнатах |
+| `ui/HUD.lua` | Fusion HUD — монеты, глубина, уровни, кнопка SELL |
+| `core/AchievementManager.lua` | 🟠 **Заглушка** |
 
-### Shared
-| Файл | Статус |
-|------|--------|
-| `constants.lua` | Все константы: слои, сетка, улучшения, шансы |
-| `util/Logger.lua` | ✅ |
-| `util/Signal.lua` | ✅ Свой Signal |
-| `types/OreTypes.lua` | ✅ OreDef, OreInstance, PlayerData |
+### Shared (3 файла)
+| `constants.lua` | Слои, сетка, улучшения, шансы |
+| `util/Logger.lua` | Логирование |
+| `util/Signal.lua` | Свой Signal |
+| `types/OreTypes.lua` | Типы данных |
 
 ---
 
-## 🟠 Заглушки / частично
-
-| Файл | Проблема |
-|------|----------|
-| `core/EconomyManager.lua` | buyUpgrade/sellAll — заглушка |
-| `core/AchievementManager.lua` | Класс есть, но ачивки не подключены |
-| `core/Leaderboard.lua` | Пустышка, не падает |
+## 🟠 Заглушки
+- `EconomyManager.lua` — нет продажи руд, покупок, монет
+- `AchievementManager.lua` — не подключён
+- `Leaderboard.lua` — пустышка
+- HUD кнопка SELL — print("Sell!") вместо реальной продажи
 
 ---
 
 ## 🔴 Чего нет
-
-### Клиент (`src/client/`)
-- `core/UIController.lua`
-- `core/CameraController.lua`
-- `core/EffectsManager.lua`
-- `ui/HUD.lua`
-- `ui/ShopUI.lua`
-- `ui/BossUI.lua`
-
-### Shared (`src/shared/`)
-- `util/TableUtils.lua`
-- `util/MathUtils.lua`
-- `util/Promise.lua`
-- `util/RemoteWrapper.lua`
-- `types/PlayerData.lua`
-- `types/ShopTypes.lua`
+- Инвентарь (UI списка руд)
+- Магазин (ShopUI)
+- LayerManager
+- BossEngine
+- CameraController, EffectsManager
+- Звуки
+- Туториал
 
 ---
 
 ## 📋 MVP
 
-| Этап | Статус | Заметки |
-|------|--------|---------|
-| 1. Архитектура | ✅ | Rojo, Wally, Signal, Net, ProfileService |
-| 2. MiningEngine | ✅ | Чанки, Mine Shafts, AntiCheat, CanCollide, дырки |
-| 3. Руды | 🟡 | Damage Numbers ✅, частицы ✅, редкость тоглится `/rarity` |
-| 4. Экономика + Магазин | 🟠 | EconomyManager — заглушка |
-| 5. Слои + Глубина | 🟡 | Логика в MiningEngine, нет отдельного модуля |
-| 6. Прогрессия | 🔴 | — |
-| 7. Босс (Stone Guardian) | 🔴 | — |
-| 8. Сохранения | ✅ | ProfileManager |
-| 9. UI + Полировка | 🟡 | HP bar, hover, damage numbers есть. HUD/магазина нет |
-| 10. Тестирование | 🔴 | — |
+| Этап | Статус |
+|------|--------|
+| 1. Архитектура | ✅ |
+| 2. MiningEngine | ✅ Neighbor Reveal |
+| 3. Руды | ✅ 7 слоёв, 31 руда |
+| 4. Экономика | 🟠 EconomyManager — заглушка |
+| 5. Слои + Глубина | 🟡 В MiningEngine |
+| 6. Прогрессия | 🔴 |
+| 7. Боссы | 🔴 |
+| 8. Сохранения | ✅ ProfileManager |
+| 9. UI + Полировка | 🟡 HUD готов, инвентаря/магазина нет |
+| 10. Тестирование | 🔴 |
 
 ---
 
-## 🎮 Команды (в чат)
-- `/rarity` — показать/скрыть полоски редкости над блоками
-- `/hpbar` — показать/скрыть HP бар при наведении
-- `/help` — список команд
+## 🎮 Команды
+- `/rarity` — полоски редкости
+- `/hpbar` — HP бар при наведении
+- `/help` — список
 
 ---
 
-## 🐛 Known Issues (закрыты)
-| Проблема | Решение |
-|----------|---------|
-| Logger `...: any` в type definition | → `...any` |
-| Signal не было модуля | Создан свой |
-| Require пути через `script.shared.*` | → `game:GetService("ReplicatedStorage")` |
-| `OnServerInvoke` → `sleitnick/net` API | → `Net:Handle()` |
-| Mined блоки пересоздавались | Добавлен `_mined[]` |
-| Вся поверхность удалялась при сдвиге Y | Окно видимости фиксировано |
-| Чанки в центре (0,0) | → `_mineCenter[userId]` |
-| BindToClose на клиенте | → AncestryChanged |
+## 📊 Git
+- 3 ветки: `main`
+- 8 коммитов
+- Последний: "HUD: clean mining incremental style"
+- GitHub: `github.com/RAYADANN/deep-digger`
