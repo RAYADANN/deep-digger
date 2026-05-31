@@ -19,18 +19,18 @@ local player = Players.LocalPlayer
 local renderer = MiningRenderer.new()
 local hud: HUD? = nil
 
--- Слушаем статы с сервера
+-- Слушаем полные данные с сервера
+-- Пока два события, объединяем:
+local playerDataBuffer = {}
 Net:Connect("PlayerStats", function(data)
     if not hud then return end
-    hud:setCoins(data.coins or 0)
-    hud:setGems(data.gems or 0)
-    hud:setDepth(data.depth or 0, data.layer or "Dirt Layer")
+    for k,v in pairs(data) do playerDataBuffer[k] = v end
+    hud:setPlayerData(playerDataBuffer)
 end)
-
 Net:Connect("PlayerInventory", function(data)
     if not hud then return end
-    hud:setInventory(data.inventory or {})
-    hud:setUpgrades(data.upgrades or {})
+    for k,v in pairs(data) do playerDataBuffer[k] = v end
+    hud:setPlayerData(playerDataBuffer)
 end)
 
 -- Запускаем, когда персонаж появляется
