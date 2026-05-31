@@ -82,6 +82,25 @@
 
 ---
 
+## MCP — Roblox Studio доступ
+
+У Старенького MCP Roblox сервер запущен в VS Code.
+Я (Zeon) имею доступ к Studio через встроенные Roblox-инструменты OpenClaw:
+
+**Как активировать:**
+1. Я вижу Studio как `roblox-studio__list_roblox_studios`
+2. Выбрать нужную: `roblox-studio__set_active_studio(studio_id)`
+3. После этого работают:
+   - `search_game_tree(path)` — иерархия объектов
+   - `inspect_instance(path)` — свойства объекта
+   - `script_read(file)` — чтение скриптов
+   - `script_grep(query)` — поиск по скриптам
+   - `execute_luau(code)` — запуск кода в Studio
+   - `screen_capture()` — скриншоты
+
+**Важно:** Основная разработка — через Rojo. Studio-инструменты — для отладки,
+просмотра Workspace, проверки что синхронизировалось.
+
 ## Контакты
 
 - **Старенький** — заказчик, тестирует в Studio
