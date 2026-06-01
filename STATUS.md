@@ -1,7 +1,8 @@
 # STATUS.md — Deep Digger 🪨
 
 > Состояние проекта, заглушки и планы.
-> Обновлено: 2026-06-01
+> Обновлено: 2026-06-02
+> **Scope расширен:** MVP теперь launch-ready (pets, rebirth, monetization, leaderboard, daily). См. MVP.md.
 
 ---
 
@@ -64,10 +65,28 @@ UI:          Fusion 0.3 (scope: Value, New, Computed, OnEvent)
 
 ---
 
-## 🔴 Чего нет (post-MVP)
+## 🔴 Чего нет в коде, но **должно быть к релизу** (Фазы 7-13)
+
+| Модуль | Фаза |
+|--------|------|
+| `client/core/CameraShake.lua` | 7 (game feel) |
+| `client/ui/Tutorial.lua` | 8 (онбординг) |
+| `server/core/RebirthManager.lua` | 9 (prestige) |
+| `server/core/DailyReward.lua` | 10 (retention) |
+| `shared/data/PetDatabase.lua` | 11 (pets) |
+| `server/core/PetManager.lua` | 11 (pets) |
+| `server/core/EggManager.lua` | 11 (pets) |
+| `client/ui/PetsPanel.lua` | 11 (pets) |
+| `server/core/MonetizationManager.lua` | 12 (revenue) |
+| `Constants.GAMEPASSES`, `Constants.DEVPRODUCTS`, `Constants.REBIRTH` | 9, 12 |
+
+## 🔴 Post-MVP (патчи 1.1, 1.2 и большие апдейты)
+- Trading между игроками.
+- Achievements (`AchievementManager` есть, подключить).
 - BossEngine, Mine Shafts как отдельная фича.
-- Магазин за гемы, расходники (молоток/бомба).
-- Звуки, туториал, полноценный визуальный пасс.
+- Limestone+ контент-пасс.
+- Гильдии / кланы, limited events.
+- Расходники (молоток/бомба), гемы и магазин за гемы.
 
 ---
 
@@ -82,8 +101,14 @@ UI:          Fusion 0.3 (scope: Value, New, Computed, OnEvent)
 | 4. Прогрессия слоёв | 🟢 |
 | 5. Сеть и производительность | 🟢 (требуется плейтест-профайл) |
 | 6. Один источник данных по рудам | 🔴 |
-| 7. Полировка | 🔴 |
-| 8. Стабилизация | 🔴 |
+| 7. Game Feel & Juice (звуки, screen shake) | 🔴 |
+| 8. Онбординг и UX (туториал, error UX) | 🔴 |
+| 9. Rebirth / Prestige | 🔴 |
+| 10. Daily reward + Leaderboard | 🔴 |
+| 11. Pets MVP (5-10 петов, egg) | 🔴 |
+| 12. Монетизация (3-4 gamepass + 2-3 devproduct) | 🔴 |
+| 13. Визуальная идентичность (материалы, key art) | 🔴 |
+| 14. Soft launch и стабилизация | 🔴 |
 
 ---
 
