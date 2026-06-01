@@ -5,7 +5,7 @@
 local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local Constants = require(ReplicatedStorage:WaitForChild("shared").constants)
+local LayerUtil = require(ReplicatedStorage:WaitForChild("shared").util.LayerUtil)
 local Logger = require(ReplicatedStorage:WaitForChild("shared").util.Logger)
 
 export type DepthInfo = {
@@ -20,19 +20,6 @@ local DepthTracker = {}
 DepthTracker.__index = DepthTracker
 
 local UPDATE_INTERVAL = 0.05
-
-local function depthFromY(y: number): number
-    return math.max(0, math.floor(-y / Constants.BLOCK_SIZE_STUDS))
-end
-
-local function layerFromDepth(depth: number): (string, string)
-    for _, layer in ipairs(Constants.LAYERS) do
-        if depth >= layer.depthStart and depth <= layer.depthEnd then
-            return layer.id, layer.name
-        end
-    end
-    return "void", "Void Layer"
-end
 
 function DepthTracker.new(player: Player)
     local self = setmetatable({}, DepthTracker)
@@ -53,7 +40,8 @@ function DepthTracker:_emit(depth: number)
     if not self._listener then
         return
     end
-    local layerId, layerName = layerFromDepth(depth)
+    local layer = LayerUtil.layerFromDepth(depth)
+    local layerId, layerName = layer.id, layer.name
     self._listener({
         depth = depth,
         layerId = layerId,
@@ -81,7 +69,7 @@ function DepthTracker:peek(): number
     if not root then
         return self._lastDepth
     end
-    return depthFromY(root.Position.Y)
+    return LayerUtil.depthFromY(root.Position.Y)
 end
 
 function DepthTracker:start()
@@ -101,7 +89,7 @@ function DepthTracker:start()
         if not root then
             return
         end
-        local depth = depthFromY(root.Position.Y)
+        local depth = LayerUtil.depthFromY(root.Position.Y)
         if depth ~= self._lastDepth then
             self._lastDepth = depth
             self._log:debug("Depth changed:", depth, "from y=", root.Position.Y)

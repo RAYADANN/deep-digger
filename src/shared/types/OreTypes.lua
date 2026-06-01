@@ -43,6 +43,7 @@ export type PlayerData = {
     totalBlocksMined: number,
     totalCoinsEarned: number,
     bossesDefeated: number,
+    maxDepthReached: number,
     shaftsFound: { string },
     playTime: number,
     lastSave: number,

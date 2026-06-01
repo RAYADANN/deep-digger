@@ -8,6 +8,7 @@ local modules = ReplicatedStorage:WaitForChild("Packages")
 
 local Logger = require(shared.util.Logger)
 local Constants = require(shared.constants)
+local LayerUtil = require(shared.util.LayerUtil)
 local Net = require(modules.Net)
 local OreDatabase = require(script.core.OreDatabase)
 local ProfileManager = require(script.core.ProfileManager)
@@ -19,6 +20,11 @@ local Leaderboard = require(script.core.Leaderboard)
 local DevCommands = require(script.core.DevCommands)
 
 local log = Logger.new("Server:Init")
+
+-- Дефолтный FallenPartsDestroyHeight = -500: персонаж умирает на глубине
+-- ~110 м (BLOCK_SIZE_STUDS = 4.5). Шахта у нас бесконечная вниз,
+-- поэтому опускаем порог практически в минус бесконечность.
+workspace.FallenPartsDestroyHeight = -1e6
 
 -- Инициализация модулей
 local oreDb = OreDatabase.new()
@@ -49,21 +55,73 @@ local function notifyOnce(player: Player, key: string, payload: { text: string, 
 end
 
 --[[
-    Отправить клиенту все блоки из загруженных чанков.
+    Полный snapshot блоков (только при первом заходе / resetPlayer).
+    На лету используется delta — см. MineBlock-хендлер.
 ]]
-local function syncVisibleBlocks(player: Player)
+local function sendBlocksSnapshot(player: Player)
     local playerData = profileManager:getData(player)
     if not playerData then return end
 
     local blocks = miningEngine:getVisibleBlocks(player, playerData)
-    remoteSync:FireClient(player, blocks)
+    remoteSync:FireClient(player, { kind = "snapshot", payload = blocks })
 end
 
-local function layerName(layerId: string): string
-    for _, l in ipairs(Constants.LAYERS) do
-        if l.id == layerId then return l.name end
+type BlockDeltaAgg = {
+    created: { [string]: { key: string, oreId: string, hp: number, maxHp: number } },
+    updated: { [string]: number },
+    removed: { [string]: boolean },
+}
+
+local function newDeltaAgg(): BlockDeltaAgg
+    return { created = {}, updated = {}, removed = {} }
+end
+
+--[[
+    Влить дельту одного удара в аккумулятор. Конфликты:
+      - created→removed:  отмена создания, removed не пишем (нечего удалять у клиента).
+      - removed→created:  заменяем — у клиента блок исчезнет и появится заново.
+      - created→updated:  правим hp у уже созданного блока, отдельный updated не нужен.
+]]
+local function mergeDelta(agg: BlockDeltaAgg, hitDelta)
+    if not hitDelta then return end
+    for _, k in ipairs(hitDelta.removed or {}) do
+        if agg.created[k] then
+            agg.created[k] = nil
+        else
+            agg.removed[k] = true
+        end
+        agg.updated[k] = nil
     end
-    return layerId
+    for _, b in ipairs(hitDelta.created or {}) do
+        agg.created[b.key] = b
+        agg.removed[b.key] = nil
+        agg.updated[b.key] = nil
+    end
+    for _, u in ipairs(hitDelta.updated or {}) do
+        if agg.created[u.key] then
+            agg.created[u.key].hp = u.hp
+        else
+            agg.updated[u.key] = u.hp
+        end
+    end
+end
+
+local function flushDelta(player: Player, agg: BlockDeltaAgg)
+    local createdList = {}
+    local updatedList = {}
+    local removedList = {}
+    for _, b in pairs(agg.created) do table.insert(createdList, b) end
+    for k, hp in pairs(agg.updated) do table.insert(updatedList, { key = k, hp = hp }) end
+    for k, _ in pairs(agg.removed) do table.insert(removedList, k) end
+
+    if #createdList == 0 and #updatedList == 0 and #removedList == 0 then
+        return
+    end
+
+    remoteSync:FireClient(player, {
+        kind = "delta",
+        payload = { created = createdList, updated = updatedList, removed = removedList },
+    })
 end
 
 local function buildHudPayload(playerData)
@@ -87,10 +145,9 @@ local function buildHudPayload(playerData)
         totalBlocksMined = playerData.totalBlocksMined or 0,
         totalCoinsEarned = playerData.totalCoinsEarned or 0,
         bossesDefeated = playerData.bossesDefeated or 0,
+        maxDepthReached = playerData.maxDepthReached or 0,
     }
 end
-
-local _ = layerName -- зарезервировано для будущей логики (Фаза 4)
 
 local function syncPlayerHud(player: Player)
     local playerData = profileManager:getData(player)
@@ -101,6 +158,44 @@ local function syncPlayerHud(player: Player)
     remoteStats:FireClient(player, payload)
     remoteInv:FireClient(player, payload)
 end
+
+local function processDepthUpdate(player: Player, depth: number)
+    local playerData = profileManager:getData(player)
+    if not playerData then
+        return
+    end
+
+    depth = math.max(0, math.floor(depth))
+    local prevDepth = playerData.depth or 0
+    local newLayer = LayerUtil.layerFromDepth(depth)
+    local stoneLayer = LayerUtil.getLayer("stone")
+
+    playerData.depth = depth
+    playerData.layer = newLayer.id
+
+    if stoneLayer and prevDepth < stoneLayer.depthStart and depth >= stoneLayer.depthStart and not playerData._stoneLayerNotified then
+        playerData._stoneLayerNotified = true
+        notify(player, {
+            text = "Вы вошли в " .. stoneLayer.name .. "!",
+            icon = "🪨",
+            color = LayerUtil.colorToPayload(stoneLayer.bgColor),
+            duration = 3.5,
+        })
+    end
+
+    local record = playerData.maxDepthReached or 0
+    if depth > record then
+        playerData.maxDepthReached = depth
+        syncPlayerHud(player)
+    end
+end
+
+Net:Handle("UpdateDepth", function(player: Player, depth: number)
+    if typeof(depth) ~= "number" then
+        return
+    end
+    processDepthUpdate(player, depth)
+end)
 
 local economyManager = EconomyManager.new({
     profileManager = profileManager,
@@ -134,9 +229,14 @@ Net:Handle("MineBlock", function(player: Player, clicks: { { x: number, z: numbe
 
     local results = {}
     local blocksChanged = false
+    local deltaAgg = newDeltaAgg()
 
     for _, click in ipairs(clicks) do
         local result = miningEngine:hitBlock(player, playerData, click.x, click.z, click.y, nil)
+        if result.blockDelta then
+            mergeDelta(deltaAgg, result.blockDelta)
+            result.blockDelta = nil
+        end
         if result.mined and result.oreDef then
             blocksChanged = true
             local fortuneBonus = MiningLoot.rollFortuneBonus(playerData.fortuneLevel or 1)
@@ -160,14 +260,40 @@ Net:Handle("MineBlock", function(player: Player, clicks: { { x: number, z: numbe
                     color = { r = 255, g = 90, b = 60 },
                 })
             end
+            if result.roomGenerated then
+                local roomText
+                local roomColor
+                if result.roomRarity then
+                    local rarityLabel = Constants.RARITY_LABELS[result.roomRarity] or result.roomRarity
+                    roomColor = Constants.RARITY_COLORS[result.roomRarity] or Constants.RARITY_COLORS.common
+                    roomText = "Вам повезло! Скрытая комната — внутри " .. rarityLabel .. " руда!"
+                else
+                    roomColor = Constants.RARITY_COLORS.uncommon
+                    roomText = "Вам повезло! Найдена скрытая комната!"
+                end
+                notify(player, {
+                    text = roomText,
+                    icon = "✨",
+                    color = LayerUtil.colorToPayload(roomColor),
+                    duration = 4.5,
+                })
+            end
         elseif result.success then
             blocksChanged = true
+        end
+        if result.weakPickaxe then
+            notifyOnce(player, "weak_pickaxe", {
+                text = "Кирка слишком слабая для Stone! Прокачайте её (ур. " .. Constants.STONE_PICKAXE_MIN_LEVEL .. "+)",
+                icon = "⛏",
+                color = { r = 255, g = 140, b = 60 },
+                duration = 3.5,
+            })
         end
         table.insert(results, result)
     end
 
+    flushDelta(player, deltaAgg)
     if blocksChanged then
-        syncVisibleBlocks(player)
         syncPlayerHud(player)
     end
 
@@ -188,12 +314,13 @@ local function onPlayerAdded(player: Player)
     -- Глубина — текущая позиция, не сохраняется между сессиями
     playerData.depth = 0
     playerData.layer = "dirt"
+    playerData._stoneLayerNotified = false
 
     -- 2. Ждём клиент
     task.wait(2)
 
-    -- 3. Загружаем чанки и синхронизируем
-    syncVisibleBlocks(player)
+    -- 3. Полный snapshot блоков для начального состояния клиента
+    sendBlocksSnapshot(player)
 
     -- 4. Отправляем данные на HUD
     syncPlayerHud(player)

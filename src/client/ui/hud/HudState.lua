@@ -22,6 +22,7 @@ export type HudState = {
     statBlocksMined: any,
     statTotalCoins: any,
     statBossesDefeated: any,
+    statMaxDepth: any,
 }
 
 local HudState = {}
@@ -41,6 +42,7 @@ function HudState.create(scope: ScopeFactory.HudScope): HudState
         statBlocksMined = scope:Value(0),
         statTotalCoins = scope:Value(0),
         statBossesDefeated = scope:Value(0),
+        statMaxDepth = scope:Value(0),
     }
 end
 
@@ -62,6 +64,7 @@ function HudState.applyServerPayload(state: HudState, payload: PlayerDataMapper.
     state.statBlocksMined:set(mapped.totalBlocksMined)
     state.statTotalCoins:set(mapped.totalCoinsEarned)
     state.statBossesDefeated:set(mapped.bossesDefeated)
+    state.statMaxDepth:set(mapped.maxDepthReached)
 end
 
 function HudState.applyDepth(state: HudState, depth: number, layerId: string, layerName: string)

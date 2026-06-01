@@ -2,6 +2,9 @@
 -- MiningEngine.lua — бесконечная 3D шахта через Neighbor Reveal.
 -- Блоки генерируются только когда нужны (при ломке соседнего).
 -- Никаких чанков — никаких дыр.
+--
+-- hitBlock возвращает result.blockDelta = { created, updated, removed },
+-- чтобы сервер не шёл всю карту блоков по сети каждый удар.
 
 local shared = game:GetService("ReplicatedStorage"):WaitForChild("shared")
 local Signal = require(shared.util.Signal)
@@ -16,20 +19,64 @@ MiningEngine.__index = MiningEngine
 type OreDef = OreTypes.OreDef
 type PlayerData = OreTypes.PlayerData
 
+export type BlockSnap = { oreId: string, hp: number, maxHp: number }
+export type BlockDelta = {
+    created: { { key: string, oreId: string, hp: number, maxHp: number } },
+    updated: { { key: string, hp: number } },
+    removed: { string },
+}
+
 local NEIGHBORS = {
     {1,0,0}, {-1,0,0},
     {0,1,0}, {0,-1,0},
     {0,0,1}, {0,0,-1},
 }
 
-local SW = Constants.SURFACE_W -- 15
-local SD = Constants.SURFACE_D -- 15
-local SH = Constants.SURFACE_H -- 10
+local SW = Constants.SURFACE_W
+local SD = Constants.SURFACE_D
+local SH = Constants.SURFACE_H
 
 local function key(x, z, y) return string.format("%d_%d_%d", x, z, y) end
-local function parseKey(k)
-    local parts = string.split(k, "_")
-    return tonumber(parts[1]) or 0, tonumber(parts[2]) or 0, tonumber(parts[3]) or 0
+
+--[[
+    Снимок блока по ключу. Если блока не было — записываем false-маркер.
+    Вызывается ДО любой мутации, чтобы потом собрать дельту.
+]]
+local function trackKey(snapshot: { [string]: any }, blocks: { [string]: any }, k: string)
+    if snapshot[k] ~= nil then return end
+    local existing = blocks[k]
+    if existing then
+        snapshot[k] = { oreId = existing.oreId, hp = existing.hp, maxHp = existing.maxHp } :: BlockSnap
+    else
+        snapshot[k] = false
+    end
+end
+
+local function emptyDelta(): BlockDelta
+    return { created = {}, updated = {}, removed = {} }
+end
+
+local function buildDelta(snapshot: { [string]: any }, blocks: { [string]: any }): BlockDelta
+    local delta = emptyDelta()
+    for k, orig in pairs(snapshot) do
+        local cur = blocks[k]
+        if orig == false then
+            if cur ~= nil then
+                table.insert(delta.created, { key = k, oreId = cur.oreId, hp = cur.hp, maxHp = cur.maxHp })
+            end
+        else
+            if cur == nil then
+                table.insert(delta.removed, k)
+            elseif cur.oreId ~= orig.oreId or cur.maxHp ~= orig.maxHp then
+                -- сундук заменил обычный блок на той же клетке: client должен пересоздать part
+                table.insert(delta.removed, k)
+                table.insert(delta.created, { key = k, oreId = cur.oreId, hp = cur.hp, maxHp = cur.maxHp })
+            elseif cur.hp ~= orig.hp then
+                table.insert(delta.updated, { key = k, hp = cur.hp })
+            end
+        end
+    end
+    return delta
 end
 
 function MiningEngine.new(db)
@@ -76,13 +123,18 @@ function MiningEngine:_ensure(userId, x, z, y)
     blocks[k] = self:_createBlock(x, z, y)
 end
 
-function MiningEngine:_revealNeighbors(userId, x, z, y)
+--[[
+    Открывает 6 соседей вокруг (x,z,y). Если передан snapshot —
+    фиксирует исходное состояние каждой клетки ДО создания нового блока.
+]]
+function MiningEngine:_revealNeighbors(userId, x, z, y, snapshot)
     local blocks, air = self._blocks[userId], self._air[userId]
     for _, d in ipairs(NEIGHBORS) do
         local nx, nz, ny = x + d[1], z + d[3], y + d[2]
         if ny >= 0 then
             local k = key(nx, nz, ny)
             if not (air and air[k]) and not (blocks and blocks[k]) then
+                if snapshot then trackKey(snapshot, blocks, k) end
                 blocks[k] = self:_createBlock(nx, nz, ny)
             end
         end
@@ -102,7 +154,25 @@ function MiningEngine:_genSurface(userId)
 end
 
 --[[
+    Блок считается «открытым» если:
+      - имеет хотя бы одного air-соседа, либо
+      - находится в поверхностном кубе (y < SURFACE_H) — туда игрок может
+        кликнуть напрямую, даже если внутренние блоки не имеют air-соседей.
+]]
+function MiningEngine:_isExposed(userId, x, z, y): boolean
+    if y < SH then return true end
+    local air = self._air[userId]
+    if not air then return false end
+    for _, d in ipairs(NEIGHBORS) do
+        local nk = key(x + d[1], z + d[3], y + d[2])
+        if air[nk] then return true end
+    end
+    return false
+end
+
+--[[
     Инициализация + генерация поверхности при первом вызове.
+    Возвращает массив всех блоков (полный snapshot для клиента).
 ]]
 function MiningEngine:getVisibleBlocks(player, playerData)
     local uid = player.UserId
@@ -117,6 +187,8 @@ end
 
 --[[
     Ударить блок. Сломал → генерируем соседей = никаких дыр.
+    Возвращает обычный result + result.blockDelta — компактный список
+    изменений (created / updated / removed) для отправки клиенту.
 ]]
 function MiningEngine:hitBlock(player, playerData, x, z, y, isCrit: boolean?)
     local uid = player.UserId
@@ -126,15 +198,33 @@ function MiningEngine:hitBlock(player, playerData, x, z, y, isCrit: boolean?)
     local block = blocks[k]
     if not block then return { success = false, error = "Block not found" } end
 
+    if not self:_isExposed(uid, x, z, y) then
+        return { success = false, error = "Block not exposed" }
+    end
+
     if isCrit == nil then
         isCrit = math.random() < UpgradeLogic.critChance(playerData.critLevel or 1)
     end
 
     local power = UpgradeLogic.pickaxePower(playerData.pickaxeLevel or 1)
     local dmg = if isCrit then power * 3 else power
+
+    local blockLayer = self:_layer(block.depth)
+    local weakPickaxe = false
+    if blockLayer == "stone" and (playerData.pickaxeLevel or 1) < Constants.STONE_PICKAXE_MIN_LEVEL then
+        dmg *= Constants.STONE_DAMAGE_PENALTY
+        weakPickaxe = true
+    end
+
+    local snapshot: { [string]: any } = {}
+    trackKey(snapshot, blocks, k)
     block.hp -= dmg
     if block.hp > 0 then
-        return { success = true, mined = false, damage = dmg, crit = isCrit, remainingHp = block.hp }
+        return {
+            success = true, mined = false, damage = dmg, crit = isCrit,
+            remainingHp = block.hp, weakPickaxe = weakPickaxe,
+            blockDelta = buildDelta(snapshot, blocks),
+        }
     end
 
     local pool = self._db[self:_layer(block.depth)] or {}
@@ -142,8 +232,7 @@ function MiningEngine:hitBlock(player, playerData, x, z, y, isCrit: boolean?)
     for _, o in ipairs(pool) do if o.id == block.oreId then oreDef = o; break end end
     blocks[k] = nil; air[k] = true
 
-    -- Neighbor Reveal: соседи появляются немедленно
-    self:_revealNeighbors(uid, x, z, y)
+    self:_revealNeighbors(uid, x, z, y, snapshot)
 
     if oreDef then
         playerData.layer = self:_layer(block.depth)
@@ -151,7 +240,10 @@ function MiningEngine:hitBlock(player, playerData, x, z, y, isCrit: boolean?)
     self.onOreMined:fire(player, oreDef, block.depth)
 
     local roomRarity = nil
-    if oreDef and math.random() <= 0.15 + block.depth * 0.00002 then
+    local roomGenerated = false
+    local roomChance = Constants.SHAFT_BASE_CHANCE + block.depth * Constants.SHAFT_DEPTH_BONUS
+    if oreDef and math.random() <= roomChance then
+        roomGenerated = true
         local steps = 4 + math.random(0, 6)
         local cx, cz, cy = x, z, y
         local minY = math.max(0, y - 1)
@@ -160,11 +252,12 @@ function MiningEngine:hitBlock(player, playerData, x, z, y, isCrit: boolean?)
             local nx, nz, ny = cx + d[1], cz + d[3], math.max(minY, cy + d[2])
             for dx = -1, 1 do for dz = -1, 1 do for dy = -1, 1 do
                 local rny = ny + dy
-                if rny >= minY and math.random() < 0.7 then
+                if rny >= minY and math.random() < Constants.SHAFT_EXPAND_CHANCE then
                     local rk = key(nx+dx, nz+dz, rny)
                     if blocks[rk] and not air[rk] then
+                        trackKey(snapshot, blocks, rk)
                         blocks[rk] = nil; air[rk] = true
-                        self:_revealNeighbors(uid, nx+dx, nz+dz, rny)
+                        self:_revealNeighbors(uid, nx+dx, nz+dz, rny, snapshot)
                     end
                 end
             end end end
@@ -175,14 +268,20 @@ function MiningEngine:hitBlock(player, playerData, x, z, y, isCrit: boolean?)
             local ro = self:_roll(self:_layer(block.depth))
             local rarities = {"common","uncommon","rare","epic","legendary","mythic"}
             local ri = 1; for i, r in ipairs(rarities) do if r == ro.rarity then ri = i; break end end
-            local nri = math.min(#rarities, ri + 1 + math.random(0, 2))
+            local nri = math.min(#rarities, ri + 1 + math.random(0, Constants.SHAFT_RARITY_BOOST_MAX))
             for _, o in ipairs(pool) do if o.rarity == rarities[nri] then ro = o; break end end
-            blocks[ek] = { oreId = ro.id, hp = ro.hp*(3+math.random(0,3)), maxHp = ro.hp*(3+math.random(0,3)), depth = block.depth }
+            local chestHp = ro.hp * (3 + math.random(0, 3))
+            trackKey(snapshot, blocks, ek)
+            blocks[ek] = { oreId = ro.id, hp = chestHp, maxHp = chestHp, depth = block.depth }
             roomRarity = ro.rarity
         end
     end
 
-    return { success = true, mined = true, oreDef = oreDef, damage = dmg, crit = isCrit, roomRarity = roomRarity }
+    return {
+        success = true, mined = true, oreDef = oreDef, damage = dmg, crit = isCrit,
+        roomGenerated = roomGenerated, roomRarity = roomRarity, weakPickaxe = weakPickaxe,
+        blockDelta = buildDelta(snapshot, blocks),
+    }
 end
 
 function MiningEngine:resetPlayer(player)

@@ -1,97 +1,116 @@
 # STATUS.md — Deep Digger 🪨
 
 > Состояние проекта, заглушки и планы.
-> Обновлено: 2026-05-31
+> Обновлено: 2026-06-01
 
 ---
 
 ## 🏗 Архитектура
 
 ```
-Движок:     Neighbor Reveal — блоки генерируются при разрушении соседних
+Движок:      Neighbor Reveal — блоки генерируются при разрушении соседних
 Поверхность: 15×15×10 (2250 блоков) при старте
 Расширение:  бесконечное по X, Z, Y (6 направлений по 3D-граням)
-Блок:       4.5×4.5×4.5 студа, CanCollide = true
-Позиция:    Z=30 перед игроком, Y=0 на уровне ног
-Ключи:      "x_z_y"
-UI:         Fusion 0.3 (scope: Value, New, Computed, OnEvent)
+Блок:        4.5×4.5×4.5 студа, CanCollide = true
+Позиция:     Z=30 перед игроком, Y=0 на уровне ног
+Ключи:       "x_z_y"
+UI:          Fusion 0.3 (scope: Value, New, Computed, OnEvent)
+Сеть:        SyncBlocks { kind = "snapshot" | "delta", payload }
+             snapshot → один раз при заходе/reset
+             delta    → { created, updated, removed } после каждого удара
 ```
 
 ---
 
 ## ✅ Готово
 
-### Сервер (6 файлов)
+### Сервер
 | Файл | Что делает |
 |------|------------|
-| `init.server.lua` | Точка входа, обработка кликов, синхронизация блоков + статов |
-| `core/MiningEngine.lua` | Neighbor Reveal, поверхность, комнаты (15% шанс) |
+| `init.server.lua` | Точка входа, MineBlock + дельта-флаш, depth-sync, notify |
+| `core/MiningEngine.lua` | Neighbor Reveal, валидация exposed-блоков, дельта в `blockDelta` |
 | `core/OreDatabase.lua` | 31 руда, 7 слоёв (Dirt → Void) |
 | `core/ProfileManager.lua` | ProfileService, автосохранение, данные игрока |
-| `core/AntiCheat.lua` | Лимит 15 кликов/сек |
-| `core/EconomyManager.lua` | 🟠 **Заглушка** — buyUpgrade/sellAll "Not implemented" |
+| `core/AntiCheat.lua` | CPS, лимит батча `MAX_MINE_BATCH_SIZE`, swing-кулдаун |
+| `core/EconomyManager.lua` | BuyUpgrade/SellOres, multiSell, autoSell |
+| `core/MiningLoot.lua` | Fortune-ролл, capacity + autoSell |
+| `core/DevCommands.lua` | `/coins`, `/reset`, `/maxlvl`, `/devhelp` (Studio) |
 
-### Клиент (4 файла)
+### Клиент
 | Файл | Что делает |
 |------|------------|
-| `init.client.lua` | Точка входа, рендер + HUD + PlayerStats |
-| `core/MiningRenderer.lua` | 3D-блоки, HP bar, hover, частицы, уведомления о комнатах |
-| `ui/HUD.lua` | Fusion HUD — монеты, глубина, уровни, кнопка SELL |
-| `core/AchievementManager.lua` | 🟠 **Заглушка** |
+| `init.client.lua` | Точка входа, рендер + HUD + PlayerStats + Notify |
+| `core/MiningRenderer.lua` | 3D-блоки, applySnapshot/applyDelta, HP-bar, hover, частицы |
+| `core/DepthTracker.lua` | Клиентский трекер глубины по `HumanoidRootPart.Y` |
+| `core/LayerEnvironment.lua` | Твин `Lighting.Ambient/OutdoorAmbient/FogColor` по слою |
+| `ui/HUD.lua` | Fusion-фасад: монеты, глубина, уровни, кнопки апгрейдов, SELL |
+| `ui/Notification.lua` | Переиспользуемая всплывашка |
 
-### Shared (3 файла)
-| `constants.lua` | Слои, сетка, улучшения, шансы |
-| `util/Logger.lua` | Логирование |
-| `util/Signal.lua` | Свой Signal |
+### Shared
+| Файл | Что делает |
+|------|------------|
+| `constants.lua` | Слои, сетка, апгрейды, RARITY_*, SHAFT_* |
+| `util/LayerUtil.lua` | depth↔layer, colorToPayload |
+| `util/UpgradeLogic.lua` | Все формулы апгрейдов |
+| `util/InventoryUtil.lua` | totalCount, addOre |
+| `util/Logger.lua`, `util/Signal.lua` | Утилиты |
 | `types/OreTypes.lua` | Типы данных |
 
 ---
 
 ## 🟠 Заглушки
-- `EconomyManager.lua` — нет продажи руд, покупок, монет
-- `AchievementManager.lua` — не подключён
-- `Leaderboard.lua` — пустышка
-- HUD кнопка SELL — print("Sell!") вместо реальной продажи
+- `AchievementManager.lua` — не подключён в MVP (после).
+- `Leaderboard.lua` — пустышка.
 
 ---
 
-## 🔴 Чего нет
-- Инвентарь (UI списка руд)
-- Магазин (ShopUI)
-- LayerManager
-- BossEngine
-- CameraController, EffectsManager
-- Звуки
-- Туториал
+## 🔴 Чего нет (post-MVP)
+- BossEngine, Mine Shafts как отдельная фича.
+- Магазин за гемы, расходники (молоток/бомба).
+- Звуки, туториал, полноценный визуальный пасс.
 
 ---
 
-## 📋 MVP
+## 📋 MVP по фазам
 
-| Этап | Статус |
+| Фаза | Статус |
 |------|--------|
-| 1. Архитектура | ✅ |
-| 2. MiningEngine | ✅ Neighbor Reveal |
-| 3. Руды | ✅ 7 слоёв, 31 руда |
-| 4. Экономика | 🟠 EconomyManager — заглушка |
-| 5. Слои + Глубина | 🟡 В MiningEngine |
-| 6. Прогрессия | 🔴 |
-| 7. Боссы | 🔴 |
-| 8. Сохранения | ✅ ProfileManager |
-| 9. UI + Полировка | 🟡 HUD готов, инвентаря/магазина нет |
-| 10. Тестирование | 🔴 |
+| 0. Scope | 🟢 |
+| 1. Фундамент и баги | 🟢 |
+| 2. Экономика | 🟢 |
+| 3. Апгрейды | 🟢 |
+| 4. Прогрессия слоёв | 🟢 |
+| 5. Сеть и производительность | 🟢 (требуется плейтест-профайл) |
+| 6. Один источник данных по рудам | 🔴 |
+| 7. Полировка | 🔴 |
+| 8. Стабилизация | 🔴 |
 
 ---
 
 ## 🎮 Команды
 - `/rarity` — полоски редкости
 - `/hpbar` — HP бар при наведении
+- `/coins <N>`, `/reset`, `/maxlvl`, `/devhelp` — только Studio
 - `/help` — список
 
 ---
 
+## 📊 Чек-лист профилирования Фазы 5
+
+Пройти 10+ минут активного копания в Studio с MicroProfiler и убедиться:
+
+- [ ] **ScriptContext (Server)** — нет монотонного роста времени на тик. Спайки только в моменты `MineBlock` (норма).
+- [ ] **RemoteEvent OutgoingDataKB/s** — после первого `snapshot` (~2250 блоков) исходящий трафик резко падает. На активном копании держится десятки B/s на дельту, не килобайты.
+- [ ] **FPS** — клиент не проседает <50 FPS на ~2000 видимых партах. Если проседает — смотреть `MiningRenderer:_createPart` (BillboardGui/ParticleEmitter).
+- [ ] **Memory (Server)** — `self._blocks[uid]` растёт линейно с количеством раскопанных блоков. Освобождается при `resetPlayer` (выход игрока).
+- [ ] **Tasks scheduled** — `_animateDestroy` через 0.3 с чистит partы; в `_parts`/`_blockData` нет осиротевших ключей после серии разрушений.
+- [ ] **Второй аккаунт** — два игрока на одном сервере, дельты идут только своему игроку (`FireClient`, не `FireAllClients`).
+- [ ] **Античит** — фастклик `/onclick` (или AutoHotkey) триггерит `Too many clicks` / `Too fast` уже на батч >16 или CPS >20.
+
+Если все галочки зелёные → Фаза 5 закрыта окончательно, можно переходить к Фазе 6 (`OreDatabase` как единственный источник для клиентских цветов/редкостей).
+
+---
+
 ## 📊 Git
-- 3 ветки: `main`
-- 8 коммитов
-- Последний: "HUD: clean mining incremental style"
+- `main`
 - GitHub: `github.com/RAYADANN/deep-digger`

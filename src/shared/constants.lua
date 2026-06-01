@@ -24,8 +24,30 @@ Constants.SHAFT_D = 5
 Constants.SHAFT_H = 5
 
 Constants.RARITY_CHANCES = { common = 0.50, uncommon = 0.30, rare = 0.15, epic = 0.04, legendary = 0.009, mythic = 0.001 }
-Constants.SHAFT_BASE_CHANCE = 0.06
+Constants.RARITY_COLORS = {
+    common = Color3.fromRGB(180, 180, 180),
+    uncommon = Color3.fromRGB(100, 200, 100),
+    rare = Color3.fromRGB(60, 140, 255),
+    epic = Color3.fromRGB(180, 60, 220),
+    legendary = Color3.fromRGB(255, 160, 0),
+    mythic = Color3.fromRGB(255, 50, 50),
+}
+Constants.RARITY_LABELS = {
+    common = "Common",
+    uncommon = "Uncommon",
+    rare = "Rare",
+    epic = "Epic",
+    legendary = "Legendary",
+    mythic = "Mythic",
+}
+-- Скрытые комнаты (MiningEngine.hitBlock):
+--   шанс комнаты = SHAFT_BASE_CHANCE + depth * SHAFT_DEPTH_BONUS
+--   на каждом шаге каверны 3x3x3 кубик становится air с вероятностью SHAFT_EXPAND_CHANCE
+--   редкость сундука бустится на (1 + math.random(0, SHAFT_RARITY_BOOST_MAX)) ступеней
+Constants.SHAFT_BASE_CHANCE = 0.08
 Constants.SHAFT_DEPTH_BONUS = 0.0001
+Constants.SHAFT_EXPAND_CHANCE = 0.7
+Constants.SHAFT_RARITY_BOOST_MAX = 2
 Constants.SHAFT_RARE_BOOST = 0.25
 Constants.SHAFT_PERMANENT_BONUS = 0.005
 
@@ -38,6 +60,9 @@ Constants.UPGRADES = {
     multiSell = { baseCost = 800, exponent = 1.8, maxLevel = 10, bonusPerLevel = 0.05 },
     autoSell = { baseCost = 5000, maxLevel = 1 },
 }
+
+Constants.STONE_PICKAXE_MIN_LEVEL = 5
+Constants.STONE_DAMAGE_PENALTY = 0.5
 
 Constants.BASE_INVENTORY_SLOTS = 10
 Constants.BASE_SWING_DELAY_MS = 400

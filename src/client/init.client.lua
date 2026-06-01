@@ -9,6 +9,7 @@ local modules = ReplicatedStorage:WaitForChild("Packages")
 local Logger = require(shared.util.Logger)
 local MiningRenderer = require(script.core.MiningRenderer)
 local DepthTracker = require(script.core.DepthTracker)
+local LayerEnvironment = require(script.core.LayerEnvironment)
 local HUD = require(script.ui.HUD)
 local Notification = require(script.ui.Notification)
 local Net = require(modules.Net)
@@ -21,10 +22,15 @@ local player = Players.LocalPlayer
 local renderer = MiningRenderer.new()
 local hud: HUD? = nil
 local depthTracker = DepthTracker.new(player)
+local layerEnvironment = LayerEnvironment.new()
 depthTracker:onChanged(function(info)
     if hud then
         hud:setDepth(info.depth, info.layerId, info.layerName)
     end
+    layerEnvironment:apply(info.layerId)
+    pcall(function()
+        Net:Invoke("UpdateDepth", info.depth)
+    end)
 end)
 
 -- Слушаем полные данные с сервера
@@ -73,6 +79,7 @@ local function onCharacterAdded(character: Model)
     end
     renderer:start()
     hud = HUD.new(player)
+    layerEnvironment:reset()
     depthTracker:start()
 end
 

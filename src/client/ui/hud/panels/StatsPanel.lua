@@ -40,7 +40,7 @@ function StatsPanel.create(s: ScopeFactory.HudScope, state: HudStateModule.HudSt
             StatRow.create(s, {
                 label = "⬇ Макс. глубина",
                 valueText = s:Computed(function(use)
-                    return math.floor(use(state.depth)) .. " м"
+                    return math.floor(use(state.statMaxDepth)) .. " м"
                 end),
                 valueColor = C.depthFill,
             }),

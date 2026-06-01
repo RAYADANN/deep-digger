@@ -25,6 +25,7 @@ export type ServerPlayerPayload = {
     totalBlocksMined: number?,
     totalCoinsEarned: number?,
     bossesDefeated: number?,
+    maxDepthReached: number?,
 }
 
 export type MappedPlayerData = {
@@ -35,6 +36,7 @@ export type MappedPlayerData = {
     totalBlocksMined: number,
     totalCoinsEarned: number,
     bossesDefeated: number,
+    maxDepthReached: number,
 }
 
 local PlayerDataMapper = {}
@@ -111,6 +113,7 @@ function PlayerDataMapper.fromServer(payload: ServerPlayerPayload): MappedPlayer
         totalBlocksMined = payload.totalBlocksMined or 0,
         totalCoinsEarned = payload.totalCoinsEarned or 0,
         bossesDefeated = payload.bossesDefeated or 0,
+        maxDepthReached = payload.maxDepthReached or 0,
     }
 end
 

@@ -189,11 +189,22 @@ end
 
 function MiningRenderer:_animateDestroy(key)
     local p = self._parts[key]; if not p then return end
+    if p:GetAttribute("_destroying") then return end
+    p:SetAttribute("_destroying", true)
     local d = self._blockData[key]; self:_breakEffect(key, d and d.oreId or "dirt")
     local cf = p.CFrame
     TweenService:Create(p, TweenInfo.new(0.25, Enum.EasingStyle.Quint), { Size = Vector3.new(0.1, 0.1, 0.1), Transparency = 0.8 }):Play()
     TweenService:Create(p, TweenInfo.new(0.25, Enum.EasingStyle.Quint), { CFrame = cf * CFrame.new(0, -BS/2, 0) }):Play()
-    task.delay(0.3, function() self:_destroyPart(key) end)
+    -- Гард: если за 0.3 с по тому же ключу появится НОВЫЙ part (replace
+    -- через delta), не сносить его — сверяемся по конкретному инстансу.
+    -- Старый part всё равно убираем, чтобы не оставить мусор в workspace.
+    task.delay(0.3, function()
+        if self._parts[key] == p then
+            self:_destroyPart(key)
+        elseif p.Parent then
+            p:Destroy()
+        end
+    end)
 end
 
 function MiningRenderer:_dmgNumber(key, dmg, crit)
@@ -215,39 +226,6 @@ function MiningRenderer:_dmgNumber(key, dmg, crit)
     end)
 end
 
-function MiningRenderer:_showNotification(text, color)
-    local gui = Instance.new("ScreenGui")
-    gui.Name = "RoomNotif"
-    gui.Parent = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui")
-    local frame = Instance.new("Frame")
-    frame.Size = UDim2.fromOffset(360, 70)
-    frame.Position = UDim2.new(0.5, -180, 0.1, 0)
-    frame.BackgroundColor3 = Color3.fromRGB(10, 10, 30)
-    frame.BackgroundTransparency = 0.2
-    frame.BorderSizePixel = 2
-    frame.BorderColor3 = color or Color3.fromRGB(180, 130, 255)
-    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 12)
-    local label = Instance.new("TextLabel")
-    label.Size = UDim2.fromScale(1, 1)
-    label.BackgroundTransparency = 1
-    label.Text = text
-    label.Font = Enum.Font.GothamBold
-    label.TextSize = 22
-    label.TextColor3 = Color3.new(1, 1, 1)
-    label.TextStrokeTransparency = 0.3
-    label.TextStrokeColor3 = Color3.new(0, 0, 0)
-    label.Parent = frame
-    -- Анимация: появление сверху, задержка, исчезновение
-    frame.Position = UDim2.new(0.5, -180, -0.1, 0)
-    local tweenIn = game:GetService("TweenService"):Create(frame, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Position = UDim2.new(0.5, -180, 0.1, 0) })
-    tweenIn:Play()
-    task.delay(2.5, function()
-        local tweenOut = game:GetService("TweenService"):Create(frame, TweenInfo.new(0.3, Enum.EasingStyle.Quint), { Position = UDim2.new(0.5, -180, -0.15, 0) })
-        tweenOut:Play()
-        task.delay(0.35, function() gui:Destroy() end)
-    end)
-end
-
 function MiningRenderer:_onClick(key, x, z, y)
     local now = os.clock()
     if now - self._lastSwingAt < self._swingDelay * 0.95 then
@@ -259,28 +237,70 @@ function MiningRenderer:_onClick(key, x, z, y)
     if not ok or not res then return end
     local r = res[1]; if not r or not r.success then return end
     if r.damage then
+        local cached = self._blockData[key]
+        local oreId = (r.oreDef and r.oreDef.id) or (cached and cached.oreId) or "dirt"
         self:_dmgNumber(key, r.damage, r.crit or false)
-        self:_hitParticles(key, r.oreDef and r.oreDef.id or "dirt")
+        self:_hitParticles(key, oreId)
     end
-    if r.mined then self:_animateDestroy(key)
-    elseif r.remainingHp then self:_updateVisual(key, r.remainingHp) end
-    -- Уведомление о комнате
-    if r.roomRarity then
-        local rarText = r.roomRarity:sub(1,1):upper() .. r.roomRarity:sub(2)
-        local rarColors = { common = Color3.fromRGB(180,180,180), uncommon = Color3.fromRGB(100,200,100), rare = Color3.fromRGB(60,140,255), epic = Color3.fromRGB(180,60,220), legendary = Color3.fromRGB(255,160,0), mythic = Color3.fromRGB(255,50,50) }
-        self:_showNotification("🏠 Hidden Room! Contains " .. rarText .. " ore!", rarColors[r.roomRarity] or Color3.fromRGB(180,130,255))
+    -- Оптимистично обновляем HP-бар, чтобы цифра реагировала без ожидания
+    -- delta. Сервер всё равно пришлёт то же значение через SyncBlocks —
+    -- источник правды у блочного состояния один (сервер).
+    if not r.mined and r.remainingHp then
+        self:_updateVisual(key, r.remainingHp)
     end
 end
 
-function MiningRenderer:syncBlocks(blocks)
-    self._log:debug("Syncing", #blocks, "blocks")
-    local newK = {}; for _, b in ipairs(blocks) do newK[b.key] = true end
-    for k, _ in pairs(self._parts) do if not newK[k] then self:_destroyPart(k) end end
+local function parseKey(k: string): (number, number, number)
+    local parts = string.split(k, "_")
+    return tonumber(parts[1]) or 0, tonumber(parts[2]) or 0, tonumber(parts[3]) or 0
+end
+
+--[[
+    Полная замена видимых блоков. Используется один раз при заходе
+    игрока (и теоретически после resetPlayer).
+]]
+function MiningRenderer:applySnapshot(blocks)
+    self._log:debug("Snapshot:", #blocks, "blocks")
+    for k, _ in pairs(self._parts) do self:_destroyPart(k) end
     for _, b in ipairs(blocks) do
-        if not self._parts[b.key] then
-            local parts = string.split(b.key, "_")
-            self:_createPart(tonumber(parts[1]) or 0, tonumber(parts[2]) or 0, tonumber(parts[3]) or 0, b.oreId, b.hp, b.maxHp)
-        else self:_updateVisual(b.key, b.hp) end
+        local x, z, y = parseKey(b.key)
+        self:_createPart(x, z, y, b.oreId, b.hp, b.maxHp)
+    end
+end
+
+--[[
+    Точечный апдейт от сервера. Клиент верит серверу — никаких
+    собственных diff-расчётов.
+]]
+function MiningRenderer:applyDelta(delta)
+    if typeof(delta) ~= "table" then return end
+    self._log:debug("Delta: +", #(delta.created or {}), "~", #(delta.updated or {}), "-", #(delta.removed or {}))
+    for _, k in ipairs(delta.removed or {}) do
+        if self._parts[k] then
+            self:_animateDestroy(k)
+        end
+    end
+    for _, b in ipairs(delta.created or {}) do
+        if self._parts[b.key] then
+            self:_destroyPart(b.key)
+        end
+        local x, z, y = parseKey(b.key)
+        self:_createPart(x, z, y, b.oreId, b.hp, b.maxHp)
+    end
+    for _, u in ipairs(delta.updated or {}) do
+        self:_updateVisual(u.key, u.hp)
+    end
+end
+
+--[[
+    Диспетчер SyncBlocks. Формат: { kind = "snapshot" | "delta", payload = ... }.
+]]
+function MiningRenderer:syncBlocks(message)
+    if typeof(message) ~= "table" then return end
+    if message.kind == "snapshot" then
+        self:applySnapshot(message.payload or {})
+    elseif message.kind == "delta" then
+        self:applyDelta(message.payload or {})
     end
 end
 

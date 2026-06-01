@@ -50,6 +50,7 @@ local DEFAULT_DATA = {
     totalBlocksMined = 0,
     totalCoinsEarned = 0,
     bossesDefeated = 0,
+    maxDepthReached = 0,
     shaftsFound = {},
     playTime = 0,
     lastSave = 0,
