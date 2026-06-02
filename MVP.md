@@ -5,7 +5,7 @@
 > **Архитектура:** 3D Neighbor Reveal (текущая). К вертикальной сетке 6×N не возвращаемся.
 > **Кто пишет код:** AI-агент в Cursor.
 > **Кто тестирует:** разработчик (Roblox Studio + Rojo).
-> **Статус:** Фазы 0–5 закрыты 🟢 (Фаза 5 ждёт плейтест-профайл), Фаза 6 — 🔴 на очереди.
+> **Статус:** Фазы 0–10 закрыты 🟢 (Фаза 5 ждёт плейтест-профайл), Фаза 11 (Pets MVP) — 🔴 на очереди.
 > **Обновлено:** 2026-06-02
 
 ---
@@ -73,8 +73,8 @@
 |--------|------|-------------|
 | 1–3 | 0 → 1 → 2 → 3 | ✅ Сделано: копание, HUD, продажа, все 7 апгрейдов |
 | 4 | 4 → 5 | ✅ Сделано: переход слоёв, дельта-синк блоков |
-| 5 | 6 → 7 | Единый источник руд, **game feel pass** (звуки, screen shake, juice) |
-| 6 | 8 → 9 | Туториал + UX, **Rebirth/Prestige** loop |
+| 5 | 6 → 7 | ✅ Единый источник руд (Фаза 6); ✅ **game feel pass** — звуки, screen shake, juicy dmg numbers, rarity-ramp break, slow-mo crit, mobile haptics |
+| 6 | 8 → 9 | ✅ Туториал + Error UX + tooltip + count-up (Фаза 8); ✅ **Rebirth/Prestige** loop (Фаза 9) |
 | 7 | 10 | Daily reward, глобальный leaderboard (MemoryStore) |
 | 8–9 | 11 | **Pets MVP**: 5–10 питомцев, egg-система, equip slot, эффекты |
 | 10 | 12 | Монетизация: 3–4 game-passes, 2–3 DevProducts (coin packs) |
@@ -188,73 +188,102 @@
 
 ---
 
-### █ Фаза 6 — Один источник данных по рудам 🔴
+### █ Фаза 6 — Один источник данных по рудам 🟢
 
-- [ ] Клиент (`MiningRenderer`, `HUD`) берёт цвет / редкость / иконку **из `OreDatabase`** через реплику.
-- [ ] Удалить дубли таблиц `ORE_C` / `ORE_R` / `ORE_RARITY` / `ORE_ICON` из клиентского кода.
-- [ ] Добавление новой руды = правка только `OreDatabase` + автоотображение на клиенте.
+- [x] `OreDatabase` перенесён в `shared/data/OreDatabase.lua` — реплицируется через ReplicatedStorage без RemoteFunction (статичные данные, race-condition исключён).
+- [x] Клиент (`MiningRenderer`, `HUD/InvSlot`, `HUD/HudState`) берёт цвет / редкость / иконку через `client/core/OreLookup` — единый O(1) лукап по `oreId`.
+- [x] Удалены дубли: `ORE_C` / `ORE_R` / `RAR_C` из `MiningRenderer`, файл `client/ui/hud/OreCatalog.lua` целиком.
+- [x] Emoji-иконки переехали в `OreDatabase` (поле `icon`, было `""`).
+- [x] `OreDef` расширен опциональными полями `material` / `reflectance` / `atlasIndex` / `meshId` / `glow` — задел под Фазу 13 (Blender + Substance Painter texture atlas), без изменений в рендере.
+- [x] Добавление новой руды = правка только `OreDatabase` + перезапуск сервера.
 
-**Тест:** добавил тестовую руду в `OreDatabase` → она корректно отображается на клиенте без правки клиента.
+**Тест:** добавлена `test_glow` (mythic, dirt, фиолетовая, 🟪) — появляется на поверхности, красный rarity-tag, mythic-частицы, в инвентаре отображается с правильной иконкой и цветом полоски — без единой правки клиентского кода.
 
 ---
 
-### █ Фаза 7 — Game Feel & Juice 🔴
+### █ Фаза 7 — Game Feel & Juice 🟢
 
 **Цель:** превратить функциональные клики в **сочные**. Без этого игра умирает в первые 30 секунд.
 
-- [ ] **Звуки** (Roblox audio library, free): удар по блоку, разрушение, крит, продажа, покупка апгрейда, монета.
-- [ ] **Screen shake** на крите и разрушении (отдельный модуль `client/core/CameraShake.lua`, переиспользуемый).
-- [ ] **Juicy damage numbers**: увеличить размер, добавить outline + bounce-анимацию, разные цвета по типу руды (берём из `OreDatabase`).
-- [ ] **Break-эффект**: больше частиц, осколки разлетаются, слабый screen-flash на легендарной+ руде.
-- [ ] **Hover-фидбек**: при наведении блок слегка увеличивается (`Size` tween 1.0 → 1.05).
-- [ ] **Crit-эффект**: золотой sparkle + slow-mo на 0.1 сек.
-- [ ] **Mobile haptics**: `HapticService:SetMotor` на удар (для телефонов).
+- [x] **Звуки** (`shared/data/SoundDatabase` + `client/core/SoundManager`): hit_dirt/stone/metal/gem по rarity-тиру, break_common…mythic, crit, sell_success/fail, buy_upgrade/fail — Roblox audio library, free. ID помечены `TODO playtest` для свапа во время теста. 3D-звук в точке блока, 2D для UI. Один Sound-инстанс per eventId, random pitch ±0.1.
+- [x] **Camera shake** (`client/core/CameraShake.lua`): только на разрушении и только начиная с **rare** (`rare_break 0.05/0.08`, `break 0.09/0.12`, `legendary_break 0.22/0.25`). На каждом hit'е и крите камера НЕ трясётся. Реализация — суммарный offset CFrame на RenderStepped, авто-откат прошлого кадра, не накапливается.
+- [x] **Juicy damage numbers**: pop-in `TextSize 0 → final` за 0.1с (Quad/Out, мягко), `UIStroke` + adaptive stroke color (тёмный/светлый по luminance руды), цвет цифры = цвет руды, золото при крите, размер скейлится от `dmg / maxHp`.
+- [x] **Block squash на ударе**: блок упруго приплющивается (`Size BSv → 1.07/0.88/1.07 → BSv` за 0.14с) — замена шутерному camera shake. Фидбек идёт от блока, не от глаз.
+- [x] **Break-эффект (mining-style)**: разлетающиеся **физические chunks** цвета руды (6→30 по rarity, gravity-affected, fade через Debris), облако пыли через `smoke_main` (8→32 частицы, scale 1.0→1.6), **shockwave-сфера** ForceField-материала цвета редкости для rare+ (BS×2.8 → BS×8), у mythic — два кольца: rarity-цвет + золотое с задержкой 0.15с. Никакого fullscreen flash.
+- [x] **Coin-pop** (новое): `+X 💰` золотом всплывает из точки блока на 1.3с, размер крупнее на rare+. Главный mining-фидбек — игрок видит награду, ради которой копал.
+- [x] **Hover-фидбек**: `Size BSv ↔ HOVER_BSv (×1.05)` за 0.1с поверх существующих glow + SelectionBox; `_destroying` / `_squashing` / `_hovered` атрибуты разрешают конфликт между hover-, squash- и destroy-tween'ами.
+- [x] **Crit-эффект (mining-style)**: золотое shockwave-кольцо в точке блока + 6 золотых chunks, отдельный звук `crit`, золотая `dmgNumber` ×1.4 размера. **Без slow-mo** (это шутерный эффект, в mining ломает темп).
+- [x] **Mobile haptics** (`client/core/Haptics.lua`): pulse-пресеты `hit 0.12/0.03` (очень мягко, копание = много кликов), `crit 0.4/0.06`, `break 0.6/0.08`, `legendary_break 1.0/0.15`. `pcall`-обёртка вокруг `HapticService:SetMotor`, no-op на десктопе.
 
 **Тест:** записать gif/видео — выглядит «как в топовых Roblox-играх», а не как unity-тутор.
 
 ---
 
-### █ Фаза 8 — Онбординг и UX 🔴
+### █ Фаза 8 — Онбординг и UX 🟢
 
 **Цель:** новый игрок понимает что делать за 30 секунд, без чтения.
 
-- [ ] **3 подсказки** (`client/ui/Tutorial.lua`): 1) «Кликни блок», 2) «Открой инвентарь, продай руду», 3) «Купи кирку». Прогресс сохраняется в `playerData.tutorialStep`.
-- [ ] **Стрелки/highlights** на нужный UI-элемент в каждом шаге.
-- [ ] **Error UX**: «недостаточно монет» при попытке купить апгрейд (тост вместо silent fail), disabled-стейт кнопок с серым цветом.
-- [ ] **Финальная полировка HUD**: hover-tooltips на апгрейдах с описанием эффекта, плавные tween цифр (count-up на coins/inventory).
-- [ ] **First-time bonus**: 100 стартовых монет, чтобы новичок мог сразу купить первый апгрейд.
+- [x] **3 подсказки** (`client/ui/Tutorial.lua` orchestrator + `tutorial/TutorialFlow.lua` data-driven сцены): 1) «Кликни блок» (стрелка на ближайший block-part), 2) «Открой инвентарь» → «Продай руду» (стрелка на Tab_inventory, потом SellButton), 3) «Купи кирку» (Tab_upgrades → UpgRow_pickaxe). Прогресс — `playerData.tutorialStep` (0..3), сервер валидирует монотонный рост в `TutorialManager.lua`.
+- [x] **Стрелки/highlights** (`client/ui/TutorialArrow.lua`): пульсирующий золотой UIStroke поверх GuiObject и BillboardGui-стрелка ⬇ с bounce-tween над BasePart. Стрелка следит за target через RenderStepped, не блокирует ввод (`Active = false`).
+- [x] **Диалоговые окна** (`client/ui/tutorial/TutorialDialog.lua`): боттом-центр диалог наставника «Шахтёр Бородач ⛏️» с typewriter-эффектом (~42 char/sec, UTF-8 safe), кнопкой [Понятно ✓] и [✕] skip. Цвет stroke зависит от kind (intro=gold, task=cyan, success=green, finale=mythic). Slide-in/out, клик по диалогу мгновенно дописывает текст. `Active=false` снаружи — геймплей не блокируется.
+- [x] **Мини-задания** (`client/ui/tutorial/TutorialTracker.lua`): квест-трекер справа под TopBar с заголовком «Задание N из 3», описанием и опциональным progress bar. На выполнение — заполнение до конца, цвет → зелёный, анимированный ✓ (Back/Out 0.3с), auto-hide через 1.4с.
+- [x] **Data-driven flow** (`client/ui/tutorial/TutorialFlow.lua`): все 9 сцен (`welcome → step_0_task → step_0_success → step_1_open_inventory → step_1_sell → step_1_success → step_2_open_upgrades → step_2_buy_pickaxe → finale`) описаны декларативно — `speaker / text / kind / task / target / arrowText / completeOn`. Тексты диалогов переписываются без правок логики. `SERVER_STEP_AFTER` маппит scene → серверный шаг (`UpdateTutorialStep` шлётся только на success/finale).
+- [x] **Sound feedback**: `ui_click` на advance диалога, `sell_success` на завершение задачи и финал.
+- [x] **Skip Tutorial**: кнопка [✕] в диалоге → `Tutorial.skip()` → `UpdateTutorialStep(3)`. DevCommand `/skiptut` ставит `tutorialStep=3` для тестирования не-онбординг-фич.
+- [x] **Error UX**: тосты через `Notification.show` при «не хватает X монет» (с конкретным дефицитом), серверная ошибка покупки, пустой инвентарь при SELL. Inline-фидбек на кнопке остаётся как secondary-channel.
+- [x] **Tooltip** (`client/ui/hud/components/Tooltip.lua`): hover на `UpgRow` показывает имя/описание/текущий эффект/«Далее:» через `UpgradeLogic.describeCurrentLevel` + `describeNextLevel`. RichText, edge-clamping, fade 0.1с, авто-очистка через scope.
+- [x] **Count-up tween цифр**: `client/ui/hud/components/AnimatedNumber.lua` плавно «тикает» coins / totalCoinsEarned за 0.4с (Quad/Out). Авторитативный `state.coins` остаётся integer-ом для `canAffordNow` — игрок может покупать сразу после продажи, не дожидаясь tween'a.
+- [x] **First-time bonus**: `Constants.STARTER_COINS = 100`. `TutorialManager:onProfileLoaded` начисляет один раз через `profile.firstSession` флаг (защита от двойного начисления), миграция опытных профилей (totalBlocksMined>0 или totalCoinsEarned>0) сразу выставляет `tutorialStep = 3`.
 
-**Тест:** новый игрок (друг, никогда не видевший игру) играет 2 минуты молча, не задавая вопросов.
+**Тест:** новый игрок (друг, никогда не видевший игру) играет 2 минуты молча, не задавая вопросов. В Studio: `/reset` → диалог «Здорóво, новичок!» → клик «Понятно» → задание «Добыть руду 0/1» + стрелка на блок → клик блок → ✓ + диалог «Молодец!» → следующая сцена. По шагу 3 finale-диалог автоматически закрывается через 5.5с.
+
+**Дата закрытия:** 2026-06-02. **Polish-итерация:** 2026-06-02 — добавлены диалоговые окна, квест-трекер и data-driven flow по фидбеку плейтеста.
 
 ---
 
-### █ Фаза 9 — Rebirth / Prestige 🔴
+### █ Фаза 9 — Rebirth / Prestige 🟢
 
 **Цель:** долгосрочная петля. После первого ребёрта игрок видит «куда расти».
 
-- [ ] **`server/core/RebirthManager.lua`**: проверка условий (`coins >= rebirthCost(rebirths)`), сброс прогресса, инкремент `playerData.rebirths`, множитель `playerData.rebirthMultiplier = 1 + rebirths * 0.1`.
-- [ ] **Что сохраняется при ребёрте**: rebirths, питомцы, gamepasses, maxDepthReached, totalCoinsEarned. **Сбрасывается**: coins, inventory, все levelы апгрейдов.
-- [ ] **Что усиливается**: множитель к value руд, +1 к maxLevel pickaxe после R5/R10/R25.
-- [ ] **UI**: кнопка REBIRTH в HUD, disabled пока не накоплено. Подтверждение модал.
-- [ ] **Notification**: «REBIRTH! +10% damage forever» с эпичным эффектом.
-- [ ] **Net:Handle("Rebirth")** через `EconomyManager` или отдельный модуль.
-- [ ] **Cost formula** в `Constants.REBIRTH = { baseCost = 50000, exponent = 5 }`.
+- [x] **`server/core/RebirthManager.lua`**: DI (`profileManager`, `onProfileChanged`, `notify`, `onResetBlocks`), `Net:Handle("Rebirth")` с серверной валидацией `coins >= RebirthLogic.cost(rebirths)`, `_applyRebirth` сбрасывает прогресс, инкрементирует `rebirths`, денормализует `rebirthMultiplier`, шлёт тост `kind="rebirth"` для клиентского FX, `onProfileLoaded` идемпотентно пересчитывает кэш, `devRebirth(player, n)` — для DevCommands.
+- [x] **Что сохраняется при ребёрте**: `rebirths`, `rebirthMultiplier`, `totalCoinsEarned`, `totalBlocksMined`, `maxDepthReached`, `bossesDefeated`, `shaftsFound`, `playTime`, `tutorialStep`, `firstSession`. **Сбрасывается**: `coins=0`, `inventory={}`, все `*Level=1`, `autoSellUnlocked=false`, `depth/layer/_stoneLayerNotified`.
+- [x] **Что усиливается**: множитель `1 + rebirths * 0.1` к value руд в `SellInventory.execute` (после `multiSellMultiplier`); `UpgradeLogic.maxLevel(upgradeId, rebirths)` даёт +1 к maxLevel pickaxe на каждом перейденном пороге `Constants.REBIRTH.pickaxeMaxBonusAt = {5, 10, 25}`.
+- [x] **UI**: 4-й таб REBIRTH в `TabBar` (`Tab_rebirth`), `RebirthPanel.lua` с заголовком «Ребёрты: N / Множитель: x1.X», крупной кнопкой REBIRTH (disabled при недостатке монет, текст «Не хватает X 💰»), описанием «Что сохранится / сбросится / следующий бонус кирки». Опциональный TopBar-чип `💠 N x1.X` появляется при `rebirths > 0`.
+- [x] **`RebirthConfirmModal.lua`**: затемнение + центрированный фрейм, RichText body с разделением «✓ сохранится / ✗ сбросится / ⛏ следующий бонус», кнопка [РЕБЁРТ] disabled первые **0.3с** (anti-misclick), ESC / клик по backdrop / [ОТМЕНА] закрывают без действия. Modal `Active=true` — клик мимо кнопок не проваливается на backdrop.
+- [x] **`client/ui/RebirthFX.lua`**: mining-style локальный FX в позиции игрока — 3 золотых shockwave-кольца (volumes 22/32/40 студов, ForceField-сфера) + 30 золотых физических chunks с gravity. **Без camera-shake, slow-mo, fullscreen flash** — соблюдены Phase 7 mining-принципы.
+- [x] **Notification**: тост «REBIRTH! Ребёрт #N, теперь x1.X к ценам руд», icon=💠, duration=5с. `kind="rebirth"` в payload триггерит `RebirthFX.burst()` на клиенте.
+- [x] **`Net:Handle("Rebirth")`** в отдельном `RebirthManager`. `EconomyManager` не тронут — изоляция Phase 3.
+- [x] **`Constants.REBIRTH = { baseCost = 50000, exponent = 5, multiplierPerRebirth = 0.1, pickaxeMaxBonusAt = {5, 10, 25} }`**. Формулы — в `shared/util/RebirthLogic.lua` (`cost`, `valueMultiplier`, `pickaxeMaxLevelBonus`, `nextPickaxeBonusThreshold`, `describeReward`).
+- [x] **HUD-payload**: `buildHudPayload` шлёт `rebirths` + `rebirthMultiplier`; `PlayerDataMapper` мапит их в `MappedPlayerData`; `HudState.rebirths` / `state.rebirthMultiplier` обновляются мгновенно (без tween — ребёрт дискретное событие). `StatsPanel` показывает обе строки.
+- [x] **DevCommands `/rebirth [N]`** через DI `rebirthManager:devRebirth(player, N)` — даёт N ребёртов без проверки цены. `/reset` НЕ трогает rebirths (теперь явно прописано).
+- [x] **UpgradesPanel + UpgRow**: `maxLevel` и `describeNextLevel` rebirth-aware — pickaxe после R5/R10/R25 показывает корректный новый макс в tooltip'е, кнопка [+] не блокируется ложным «MAX».
 
-**Тест:** накопил 50k → нажал REBIRTH → монеты 0, apgrades 1, но новые удары делают +10% урона. Второй ребёрт стоит 250k.
+**Тест:** /coins 50000 → REBIRTH активна → клик → confirm-modal с anti-misclick 0.3с → подтверждение → тост «REBIRTH! Ребёрт #1, теперь x1.1 к ценам руд» + золотой shockwave вокруг игрока. После: монеты 0, инвентарь пуст, все апгрейды на lvl 1, autoSell выключен; totalCoinsEarned/maxDepthReached/tutorialStep=3 сохранены. Накопал руду → продал → монет на +10%. Второй ребёрт стоит 250k. /rebirth 5 → pickaxe maxLevel 100→101, /rebirth 25 → 100→103.
+
+**Дата закрытия:** 2026-06-02.
 
 ---
 
-### █ Фаза 10 — Retention loops (Daily + Leaderboard) 🔴
+### █ Фаза 10 — Retention loops (Daily + Leaderboard) 🟢
 
 **Цель:** причина вернуться завтра и сравнить себя с другими.
 
-- [ ] **Daily reward** (`server/core/DailyReward.lua`): 7-дневный цикл, награды: монеты → x2 буст → яйцо → крупный кусок монет. Проверка `os.date("*t")` дней.
-- [ ] **UI daily**: модал при заходе, если день +1 с последнего захода. Streak counter («3 дня подряд»).
-- [ ] **Глобальный лидерборд** (`server/core/Leaderboard.lua` уже заглушка — наполнить): через MemoryStoreSortedMap. Топ-100 по `totalCoinsEarned` и по `maxDepthReached`.
-- [ ] **UI лидерборда**: вкладка в HUD, показ топ-10 + позиция игрока.
-- [ ] **Notification** при попадании в топ-100.
+- [x] **Daily reward** (`server/core/DailyReward.lua`): DI как `RebirthManager` — `Net:Handle("ClaimDaily")`, серверная валидация через `DailyLogic.canClaim`, начисление монет / boost'ов, инкремент `currentStreak` (`gap == 1 → +1`, `gap == 0 → already`, `gap >= streakResetAfterMissedDays → 1`), `os.date("!*t")` UTC, `lastClaimYday/lastClaimYear` для перехода через границу года, серверный `task.spawn(rolloverCheckInterval=60s)` watcher шлёт `kind="daily_available"` без перезахода. Девкоманды: `/daily`, `/setday <N>`, `/resetdaily`, `/boost <min>`.
+- [x] **`shared/data/DailyRewardDatabase.lua`**: 7-дневный цикл, rarity common→mythic. Day 7 = +50k монет + автоматический `bonusBoost { multiplier=2, duration=1800 }`. Все формулы — в `shared/util/DailyLogic.lua` (`currentDay`, `daysBetween`, `canClaim`, `nextStreak`, `streakToCycleDay`, `timeUntilNextDay`).
+- [x] **`server/core/PlayerBoosts.lua`**: чистые функции `totalMultiplier` (multiplier - 1 суммируется аддитивно), `addBoost` (стек по kind, продлевает expiresAt), `cleanup` (вызывается в `onProfileLoaded` и в `SellInventory.execute` перед расчётом). Boost'ы хранятся в `playerData.activeBoosts` как `{ kind, multiplier, expiresAt }` — переживают рестарт.
+- [x] **`SellInventory.execute`**: `payout = floor(gross * multiSellMult * rebirthMult * boostMult)` — порядок: persistent → temporary. `PlayerBoosts.cleanup` чистит истёкшие перед расчётом.
+- [x] **UI daily** (`client/ui/DailyRewardModal.lua` + `hud/components/DailyCard.lua`): full-screen overlay `DisplayOrder=95`, сетка 7 карточек (4×2 desktop / 2×4 mobile при `viewport.X < 800`), rarity-цветной `UIStroke`, pulse-glow на текущем дне, ✓ на прошлых, затемнение на будущих. Anti-misclick **0.4с** перед `[ЗАБРАТЬ]`, ESC / `[ПОЗЖЕ]` закрывают. Каждое `show()` создаёт собственный `innerScope` + `Fusion.doCleanup` на закрытии — без накопления реактивов.
+- [x] **`client/ui/RewardFX.lua`**: full-screen coin/gem rain (60 спрайтов 💰 с physics + rotation, fade) + 3 rarity-цветных shockwave кольца в центре. ~1.5с total, `pcall`-обёртки. Триггерится через `Net:Connect("Notify")` с `payload.kind="daily_reward"` — server-authoritative по rarity (избегаем двойного burst'a).
+- [x] **TopBar чипы**: `BoostChip.lua` (visible при `#activeBoosts > 0`, локальный countdown «⚡ x2 · 29:42», RGB-cycle `UIStroke` через `RunService.Heartbeat`), `StreakChip.lua` (visible при `streak >= 2`, «🔥 N дней»). StatsPanel показывает streak + ранги лидерборда.
+- [x] **Глобальный лидерборд** (`server/core/Leaderboard.lua` переписан): `MemoryStoreSortedMap` × 2 (`Leaderboard_Coins_v1`, `Leaderboard_Depth_v1`), ключ = `"user_<userId>"`, значение = integer score, `expirationSeconds = 30 days` TTL. `writeIfChanged` через `LeaderboardLogic.shouldWrite` (delta >= `writeThresholdCoins=100`/`writeThresholdDepth=5`). Дёргается из `onEconomyChanged` (после продажи) и `RebirthManager`. Имена игроков — `Players:GetNameFromUserIdAsync` + локальный `nameCache`. Refresh раз в 30с с retry exp-backoff `2/4/8с` на ошибки MemoryStore. `Net:Function("RequestLeaderboard")` с server-side throttle 5с на игрока.
+- [x] **UI лидерборда** (`client/ui/hud/panels/LeaderboardPanel.lua` + `hud/components/LeaderRow.lua`): 5-й таб 🏆 в `TabBar` (ширина 5*58+4*6=320), toggle «💰 Монеты / ⬇ Глубина», spotlight-карточка топ-1 с короной 👑 + золотой gradient + pulse-glow, ScrollingFrame top-2..top-50, footer «Вы: #N» если игрок вне топ-50, countdown «Обновится через Ns» справа сверху. **Avatar thumbnails**: `Players:GetUserThumbnailAsync(userId, HeadShot, Size150x150)` async, кэш в module-level `{ [userId] = imageId }`, skeleton-placeholder до загрузки, fade-in при готовности. Loading skeleton (10 строк) до первого fetch'a, «Сервис недоступен, обновляем...» при ошибке.
+- [x] **HUD-payload расширен**: `buildHudPayload` шлёт `dailyState { canClaim, currentStreak, nextDay, secondsUntilNextDay, totalDaysClaimed }`, `activeBoosts` (с `remainingSeconds` на момент payload'а) и `leaderboardPlacement` ({coinsRank, depthRank, coinsValue, depthValue}). `PlayerDataMapper` + `HudState` синкают мгновенно. ProfileService template-мердж добавил поля старым профилям без миграции.
+- [x] **`Net:Connect("PlayerStats")`** в `init.client.lua`: при `dailyState.canClaim == true` и `_autoOpenedThisSession == false` автоматически открывает `DailyRewardModal`. `kind="daily_available"` в Notify — переоткрытие модала после полуночи без перезахода.
+- [x] **`Constants.DAILY`** (`cycleDays=7`, `grantBoostAtDay7=true`, `streakResetAfterMissedDays=2`, `rolloverCheckInterval=60`) + **`Constants.LEADERBOARD`** (`COINS_MAP/DEPTH_MAP` ключи, `topSize=50`, `refreshIntervalSeconds=30`, `expirationSeconds=30 дней`, `writeThresholdCoins=100`, `writeThresholdDepth=5`). Версионируем `_v1` — при изменении схемы старый лидерборд остаётся как archive.
 
-**Тест:** зашёл сегодня → daily reward. Вышел, перевёл дату на +1, зашёл → следующая награда. Лидерборд показывает всех игроков, не только моего.
+**Тест:** свежий профиль → автоoпен `DailyRewardModal` с Day 1 highlighted → [ЗАБРАТЬ] (после 0.4с) → coin-rain + sell_success звук + закрытие → TopBar показывает 🔥 1 + +500 монет через AnimatedNumber. `/setday +1` → перезаход → Day 2 (Day 1 ✓). `/setday +3` → стрик сброшен в 1. 7 итераций `/setday +1` → Day 7 даёт +50k + 30-min x2 boost → `BoostChip ⚡ x2 · 29:59` тикает → продажа руды на +100% монет. Реальное время: вход в 23:55 UTC → ждать → notify «Новая награда!» без перезахода. 🏆 таб → skeleton ~2с → топ-50 с avatar'ами, спотлайт топ-1 короной, своя строка золотом подсвечена. Toggle монеты/глубина — оба board'a в state. Перезаход в boost'е — выживает (expiresAt в профиле). `/reset` НЕ трогает dailyState/activeBoosts; `/resetdaily` отдельно.
+
+**Дата закрытия:** 2026-06-02.
 
 ---
 

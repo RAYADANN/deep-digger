@@ -12,6 +12,7 @@ local theme = require(script.Parent.Parent.theme)
 local Formatters = require(script.Parent.Parent.formatters)
 local UpgradeMeta = require(script.Parent.Parent.UpgradeMeta)
 local UpgRow = require(script.Parent.Parent.components.UpgRow)
+local UpgradeLogic = require(ReplicatedStorage:WaitForChild("shared").util.UpgradeLogic)
 
 local Children = Fusion.Children
 local C = theme.C
@@ -46,6 +47,11 @@ function UpgradesPanel.create(s: ScopeFactory.HudScope, state: HudStateModule.Hu
                 local rows = {}
                 local upgrades = use(state.upgrades)
                 local coins = use(state.coins)
+                -- Phase 9: rebirths меняют эффективный maxLevel pickaxe
+                -- (+1 за каждый порог R5/R10/R25). Тот же `use()` пересоберёт
+                -- список строк при инкременте ребёртов, поэтому isMax/tooltip
+                -- автоматически подхватят новый потолок.
+                local rebirths = use(state.rebirths) or 0
                 for _, id in ipairs(UpgradeMeta.ORDER) do
                     local row = upgrades[id]
                     if not row then
@@ -57,17 +63,22 @@ function UpgradesPanel.create(s: ScopeFactory.HudScope, state: HudStateModule.Hu
                     end
                     local displayLevel = math.max(row.level, 1)
                     local cost = Formatters.upgradeCost(id, displayLevel)
+                    local effectiveMax = UpgradeLogic.maxLevel(id, rebirths)
                     local isMax = if id == "autoSell"
                         then row.level >= 1
-                        else row.level >= cfg.maxLevel
+                        else row.level >= effectiveMax
                     rows[#rows + 1] = UpgRow.create(s, {
                         upgradeId = id,
                         level = row.level,
-                        maxLevel = cfg.maxLevel,
+                        maxLevel = effectiveMax,
+                        rebirths = rebirths,
                         cost = cost,
                         canAfford = not isMax and coins >= cost,
                         canAffordNow = function()
                             return not isMax and peek(state.coins) >= cost
+                        end,
+                        coinsNow = function()
+                            return peek(state.coins) or 0
                         end,
                         onBuy = function()
                             return Net:Invoke("BuyUpgrade", id)

@@ -10,9 +10,24 @@ local Logger = require(shared.util.Logger)
 local MiningRenderer = require(script.core.MiningRenderer)
 local DepthTracker = require(script.core.DepthTracker)
 local LayerEnvironment = require(script.core.LayerEnvironment)
+local SoundManager = require(script.core.SoundManager)
+local CameraShake = require(script.core.CameraShake)
 local HUD = require(script.ui.HUD)
 local Notification = require(script.ui.Notification)
+local Tutorial = require(script.ui.Tutorial)
+local RebirthFX = require(script.ui.RebirthFX)
+local DailyRewardModal = require(script.ui.DailyRewardModal)
+local RewardFX = require(script.ui.RewardFX)
+local ScopeFactory = require(script.ui.hud.ScopeFactory)
 local Net = require(modules.Net)
+
+-- Phase 7: запускаем юс-модули ОДИН раз (синглтоны) на старте клиента,
+-- до первого CharacterAdded — звуки и shake должны быть готовы к моменту,
+-- когда серверный snapshot прилетает и игрок начинает кликать.
+SoundManager.start()
+-- Не фиксируем камеру: при респавне CurrentCamera пересоздаётся, а внутренний
+-- currentCamera() в модуле умеет fallback на workspace.CurrentCamera каждый кадр.
+CameraShake.start()
 
 local log = Logger.new("Client:Init")
 local Players = game:GetService("Players")
@@ -47,8 +62,54 @@ local function applyPlayerPayload(data)
     end
 end
 
+-- Phase 10: persistent scope для модального оверлея DailyRewardModal.
+-- Создаём отдельный scope от HUD'a — модал переживает HUD-destroy при
+-- respawn'е. doCleanup не вызывается явно: Fusion.scoped сам управляет
+-- lifetime через PlayerGui.
+local modalScope = ScopeFactory.new()
+-- Сессионный флаг: один раз открываем модал автоматически (на первом
+-- PlayerStats с canClaim=true). Дальше — только через /daily или
+-- Notify kind="daily_available".
+local _autoOpenedThisSession = false
+
+local function tryOpenDailyModal(dailyState: any)
+    if not dailyState or not dailyState.canClaim then
+        return
+    end
+    if DailyRewardModal.isOpen() then
+        return
+    end
+    DailyRewardModal.show({
+        scope = modalScope,
+        streak = dailyState.currentStreak or 0,
+        nextDay = dailyState.nextDay or 1,
+    })
+end
+
 Net:Connect("PlayerStats", function(data)
     applyPlayerPayload(data)
+    -- Phase 8: запускаем туториал, как только сервер прислал tutorialStep.
+    -- Tutorial.start идемпотентен (early-return если уже running и если
+    -- step >= 3), поэтому безопасно вызывать на каждый PlayerStats:
+    --   * первый заход с tutorialStep < 3 → старт,
+    --   * пройденный профиль (3) → no-op,
+    --   * /reset после прохождения → Tutorial.destroy уже выставил
+    --     running=false, новый tutorialStep=0 → старт заново.
+    -- Baseline-значения totalBlocksMined / totalCoinsEarned передаём, чтобы
+    -- Tutorial не принял прошлый прогресс за «свежий клик».
+    if typeof(data) == "table" and data.tutorialStep ~= nil then
+        Tutorial.start(data.tutorialStep, data)
+    end
+    -- Phase 10: автооткрытие DailyRewardModal на первом PlayerStats с
+    -- canClaim=true в этой сессии. Открытие после rejoin'a — естественное,
+    -- но не на каждом sync HUD'a (иначе игрок не сможет закрыть модал —
+    -- сервер шлёт PlayerStats после каждой sell/buy).
+    if typeof(data) == "table" and data.dailyState and not _autoOpenedThisSession then
+        if data.dailyState.canClaim then
+            _autoOpenedThisSession = true
+            tryOpenDailyModal(data.dailyState)
+        end
+    end
 end)
 Net:Connect("PlayerInventory", function(data)
     applyPlayerPayload(data)
@@ -68,6 +129,26 @@ Net:Connect("Notify", function(payload)
         icon = payload.icon,
         duration = payload.duration,
     })
+    -- Phase 9: RebirthManager шлёт kind="rebirth" вместе с тостом. RebirthFX
+    -- работает локально (точка игрока), pcall — чтобы упавший FX не сорвал
+    -- сам тост ребёрта.
+    if payload.kind == "rebirth" then
+        pcall(RebirthFX.burst)
+    end
+    -- Phase 10: DailyReward.kind="daily_available" → открыть модал.
+    -- kind="daily_reward" → запустить RewardFX (тост уже показан выше).
+    if payload.kind == "daily_available" then
+        -- buffer'им: модал имеет смысл показывать только если в текущем
+        -- PlayerStats тоже canClaim. Дёрнем через playerDataBuffer'a.
+        local daily = playerDataBuffer.dailyState
+        if daily then
+            tryOpenDailyModal(daily)
+        end
+    elseif payload.kind == "daily_reward" then
+        pcall(function()
+            RewardFX.burst(payload.rarity)
+        end)
+    end
 end)
 
 -- Запускаем, когда персонаж появляется
@@ -81,6 +162,14 @@ local function onCharacterAdded(character: Model)
     hud = HUD.new(player)
     layerEnvironment:reset()
     depthTracker:start()
+    -- Phase 8: HUD пересоздан → старые TutorialArrow-хэндлы указывают на
+    -- destroyed-фреймы. Пересобираем стрелку под новый HUD. Если туториал
+    -- уже завершён (или ещё не стартовал) — refresh — это no-op.
+    if Tutorial.isRunning() then
+        task.defer(function()
+            Tutorial.refresh()
+        end)
+    end
 end
 
 if player.Character then
@@ -94,6 +183,7 @@ player.AncestryChanged:Connect(function()
         renderer:stop()
         depthTracker:stop()
         if hud then hud:destroy(); hud = nil end
+        Tutorial.destroy()
     end
 end)
 

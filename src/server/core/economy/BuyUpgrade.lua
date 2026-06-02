@@ -42,8 +42,13 @@ function BuyUpgrade.execute(playerData: OreTypes.PlayerData, upgradeId: string):
             return { success = false, error = "max_level", message = "Уже куплено" }
         end
         local cost = cfg.baseCost
-        if (playerData.coins or 0) < cost then
-            return { success = false, error = "not_enough_coins", message = "Не хватает монет" }
+        local coins = playerData.coins or 0
+        if coins < cost then
+            return {
+                success = false,
+                error = "not_enough_coins",
+                message = ("Не хватает %d монет"):format(cost - coins),
+            }
         end
         playerData.coins -= cost
         playerData.autoSellUnlocked = true
@@ -56,13 +61,22 @@ function BuyUpgrade.execute(playerData: OreTypes.PlayerData, upgradeId: string):
         }
     end
 
-    if currentLevel >= cfg.maxLevel then
+    -- Phase 9: maxLevel у pickaxe растёт с количеством ребёртов
+    -- (см. RebirthLogic.pickaxeMaxLevelBonus). UpgradeLogic.maxLevel —
+    -- единственный источник, чтобы клиентский tooltip и сервер совпадали.
+    local effectiveMax = UpgradeLogic.maxLevel(upgradeId, playerData.rebirths or 0)
+    if currentLevel >= effectiveMax then
         return { success = false, error = "max_level", message = "Максимальный уровень" }
     end
 
     local cost = UpgradeLogic.upgradeCost(upgradeId, currentLevel)
-    if (playerData.coins or 0) < cost then
-        return { success = false, error = "not_enough_coins", message = "Не хватает монет" }
+    local coins = playerData.coins or 0
+    if coins < cost then
+        return {
+            success = false,
+            error = "not_enough_coins",
+            message = ("Не хватает %d монет"):format(cost - coins),
+        }
     end
 
     local field = UpgradeLogic.levelField(upgradeId)

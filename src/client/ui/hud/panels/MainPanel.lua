@@ -9,6 +9,8 @@ local theme = require(script.Parent.Parent.theme)
 local InventoryPanel = require(script.Parent.InventoryPanel)
 local UpgradesPanel = require(script.Parent.UpgradesPanel)
 local StatsPanel = require(script.Parent.StatsPanel)
+local RebirthPanel = require(script.Parent.RebirthPanel)
+local LeaderboardPanel = require(script.Parent.LeaderboardPanel)
 
 local OnEvent = Fusion.OnEvent
 local Children = Fusion.Children
@@ -56,6 +58,10 @@ function MainPanel.create(s: ScopeFactory.HudScope, state: HudStateModule.HudSta
                                 return "ИНВЕНТАРЬ"
                             elseif tab == "upgrades" then
                                 return "УЛУЧШЕНИЯ"
+                            elseif tab == "rebirth" then
+                                return "РЕБЁРТ"
+                            elseif tab == "leaderboard" then
+                                return "🏆 ЛИДЕРБОРД"
                             end
                             return "СТАТИСТИКА"
                         end),
@@ -93,6 +99,8 @@ function MainPanel.create(s: ScopeFactory.HudScope, state: HudStateModule.HudSta
                     InventoryPanel.create(s, state),
                     UpgradesPanel.create(s, state),
                     StatsPanel.create(s, state),
+                    RebirthPanel.create(s, state),
+                    LeaderboardPanel.create(s, state),
                 },
             }),
         },

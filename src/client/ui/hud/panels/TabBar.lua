@@ -12,8 +12,10 @@ local Children = Fusion.Children
 local TabBar = {}
 
 function TabBar.create(s: ScopeFactory.HudScope, state: HudStateModule.HudState)
+    -- Phase 10: ширину контейнера расширили под 5-й таб (LEADERBOARD).
+    -- 5 * 58 + 4 * 6 = 314 → 320 с запасом.
     return s:New("Frame")({
-        Size = UDim2.new(0, 200, 0, 72),
+        Size = UDim2.new(0, 320, 0, 72),
         Position = UDim2.new(0, 8, 1, -80),
         BackgroundTransparency = 1,
         [Children] = {
@@ -40,6 +42,26 @@ function TabBar.create(s: ScopeFactory.HudScope, state: HudStateModule.HudState)
                 icon = "📊",
                 label = "СТАТЫ",
                 tabId = "stats",
+                activeTab = state.activeTab,
+                panelOpen = state.panelOpen,
+            }),
+            -- Phase 9: prestige-таб. Имя кнопки `Tab_rebirth` следует
+            -- конвенции Phase 8 — на случай если Tutorial.lua вырастит
+            -- 4-й шаг «попробуй ребёрт» в будущем.
+            TabBtn.create(s, {
+                icon = "💠",
+                label = "РЕБЁРТ",
+                tabId = "rebirth",
+                activeTab = state.activeTab,
+                panelOpen = state.panelOpen,
+            }),
+            -- Phase 10: глобальный лидерборд. 5-й таб — конечная точка
+            -- TabBar в MVP-scope. Tab_leaderboard используется
+            -- LeaderboardPanel.create как activeTab filter.
+            TabBtn.create(s, {
+                icon = "🏆",
+                label = "ЛИДЕРЫ",
+                tabId = "leaderboard",
                 activeTab = state.activeTab,
                 panelOpen = state.panelOpen,
             }),

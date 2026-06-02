@@ -12,6 +12,22 @@ export type Deps = {
     profileManager: any,
     onEconomyChanged: ((player: Player) -> ())?,
     notify: ((player: Player, payload: any) -> ())?,
+    -- Phase 8: опционально — TutorialManager. Если передан, /reset
+    -- сбрасывает шаги туториала и снова выдаёт стартовый бонус,
+    -- чтобы можно было пройти онбординг повторно.
+    tutorialManager: any?,
+    -- Phase 9: опционально — RebirthManager. Если передан, /rebirth [N]
+    -- даёт N ребёртов без проверки цены (для тестирования R5/R10/R25
+    -- порогов maxLevel pickaxe и масштабирования множителя).
+    rebirthManager: any?,
+    -- Phase 10: опционально — DailyReward + Leaderboard.
+    --   /daily          — open модал немедленно (force notify available).
+    --   /setday +N      — сдвиг lastClaimYday на N дней назад (test streak).
+    --   /resetdaily     — полный сброс dailyState + activeBoosts.
+    --   /boost <min>    — добавить x2 coins-boost на N минут.
+    --   /leaderboard refresh — force refresh кэша.
+    dailyReward: any?,
+    leaderboard: any?,
 }
 
 local DevCommands = {}
@@ -38,6 +54,10 @@ function DevCommands.new(deps: Deps)
     self._profileManager = deps.profileManager
     self._onEconomyChanged = deps.onEconomyChanged
     self._notify = deps.notify
+    self._tutorialManager = deps.tutorialManager
+    self._rebirthManager = deps.rebirthManager
+    self._dailyReward = deps.dailyReward
+    self._leaderboard = deps.leaderboard
 
     if not isStudio() then
         self._log:info("DevCommands disabled (not Studio)")
@@ -101,6 +121,15 @@ function DevCommands:_handleReset(player: Player)
     data.inventory = {}
     data.totalBlocksMined = 0
     data.totalCoinsEarned = 0
+    -- Phase 8: чтобы можно было повторно протестировать онбординг через
+    -- /reset, сбрасываем шаг туториала и снова выдаём стартовый бонус.
+    -- Если TutorialManager не подключён — fallback на ручной сброс полей.
+    if self._tutorialManager then
+        self._tutorialManager:reset(player)
+    else
+        data.tutorialStep = 0
+        data.firstSession = true
+    end
     self:_sync(player)
     self:_notifyPlayer(player, "Сброс монет/инвентаря")
 end
@@ -131,8 +160,123 @@ function DevCommands:_handleMaxUpgrade(player: Player, args: { string })
     self:_notifyPlayer(player, "Макс. уровень: " .. id)
 end
 
+function DevCommands:_handleRebirth(player: Player, args: { string })
+    -- Phase 9: /rebirth [N] даёт N ребёртов через RebirthManager (без
+    -- проверки цены). Если RebirthManager не передан в DI — это не баг
+    -- DevCommands, а конфиг проекта; молча выходим, чтобы /rebirth не падал.
+    if not self._rebirthManager then
+        self:_notifyPlayer(player, "RebirthManager не подключён")
+        return
+    end
+    local n: number
+    if not args[1] or args[1] == "" then
+        n = 1
+    else
+        local parsed = tonumber(args[1])
+        if not parsed or parsed <= 0 then
+            self:_notifyPlayer(player, "Использование: /rebirth [N]")
+            return
+        end
+        n = math.floor(math.min(parsed, 1000))
+    end
+    self._rebirthManager:devRebirth(player, n)
+    self:_notifyPlayer(player, ("+%d ребёртов"):format(n))
+    self._log:info("DevRebirth:", player.UserId, "+" .. n)
+end
+
+--[[
+    Phase 10 dev-команды.
+]]
+function DevCommands:_handleDaily(player: Player)
+    if not self._dailyReward then
+        self:_notifyPlayer(player, "DailyReward не подключён")
+        return
+    end
+    self._dailyReward:devNotifyAvailable(player)
+    self:_notifyPlayer(player, "Open daily modal (если canClaim)")
+end
+
+function DevCommands:_handleSetDay(player: Player, args: { string })
+    if not self._dailyReward then
+        self:_notifyPlayer(player, "DailyReward не подключён")
+        return
+    end
+    local arg = args[1] or "1"
+    -- Поддерживаем "+1", "1", "-1" (последнее — на завтра ушёл).
+    if arg:sub(1, 1) == "+" then
+        arg = arg:sub(2)
+    end
+    local n = tonumber(arg)
+    if not n then
+        self:_notifyPlayer(player, "Использование: /setday [+N]")
+        return
+    end
+    -- /setday +N значит «считать что claim был N дней назад» — после команды
+    -- canClaim снова true (если N >= 1).
+    self._dailyReward:devShiftLastClaim(player, math.floor(n))
+    self:_notifyPlayer(player, ("setday -%d дн."):format(math.floor(n)))
+end
+
+function DevCommands:_handleResetDaily(player: Player)
+    if not self._dailyReward then
+        self:_notifyPlayer(player, "DailyReward не подключён")
+        return
+    end
+    self._dailyReward:reset(player)
+    self:_notifyPlayer(player, "Daily reset")
+end
+
+function DevCommands:_handleBoost(player: Player, args: { string })
+    if not self._dailyReward then
+        self:_notifyPlayer(player, "DailyReward не подключён")
+        return
+    end
+    local minutes = tonumber(args[1]) or 5
+    if minutes <= 0 then
+        self:_notifyPlayer(player, "Использование: /boost <минут>")
+        return
+    end
+    local mult = tonumber(args[2]) or 2
+    self._dailyReward:devAddBoost(player, minutes, mult)
+    self:_notifyPlayer(player, ("+x%g boost · %d мин"):format(mult, minutes))
+end
+
+function DevCommands:_handleLeaderboardCmd(player: Player, args: { string })
+    if not self._leaderboard then
+        self:_notifyPlayer(player, "Leaderboard не подключён")
+        return
+    end
+    local sub = args[1] or "refresh"
+    if sub == "refresh" then
+        -- Принудительно дёрнем оба board'a (приватный метод, но dev-only).
+        pcall(function()
+            self._leaderboard:_refresh("coins")
+            self._leaderboard:_refresh("depth")
+        end)
+        self:_notifyPlayer(player, "Лидерборд обновляется...")
+    else
+        self:_notifyPlayer(player, "Использование: /leaderboard refresh")
+    end
+end
+
+function DevCommands:_handleSkipTutorial(player: Player)
+    -- Принудительно завершает туториал на сервере (tutorialStep = 3).
+    -- Удобно для тестов, когда нужно проверить не-онбординг-фичу, но
+    -- профиль свежий и автоматический туториал лезет.
+    local data = self:_data(player)
+    if not data then
+        return
+    end
+    data.tutorialStep = 3
+    data.firstSession = false
+    self:_sync(player)
+    self:_notifyPlayer(player, "Туториал пропущен")
+end
+
 function DevCommands:_handleHelp(player: Player)
-    self:_notifyPlayer(player, "/coins [N], /reset, /maxlvl <id>")
+    self:_notifyPlayer(player,
+        "/coins [N], /reset, /maxlvl <id>, /skiptut, /rebirth [N], /daily, /setday +N, /resetdaily, /boost <мин>, /leaderboard refresh"
+    )
 end
 
 function DevCommands:_bind(player: Player)
@@ -150,6 +294,20 @@ function DevCommands:_bind(player: Player)
             self:_handleReset(player)
         elseif cmd == "/maxlvl" then
             self:_handleMaxUpgrade(player, args)
+        elseif cmd == "/skiptut" then
+            self:_handleSkipTutorial(player)
+        elseif cmd == "/rebirth" then
+            self:_handleRebirth(player, args)
+        elseif cmd == "/daily" then
+            self:_handleDaily(player)
+        elseif cmd == "/setday" then
+            self:_handleSetDay(player, args)
+        elseif cmd == "/resetdaily" then
+            self:_handleResetDaily(player)
+        elseif cmd == "/boost" then
+            self:_handleBoost(player, args)
+        elseif cmd == "/leaderboard" then
+            self:_handleLeaderboardCmd(player, args)
         elseif cmd == "/devhelp" then
             self:_handleHelp(player)
         end

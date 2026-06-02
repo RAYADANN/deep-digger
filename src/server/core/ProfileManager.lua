@@ -33,7 +33,11 @@ export type PlayerProfile = {
     listenToRelease: (callback: (savedData: PlayerData?) -> ()) -> (),
 }
 
--- Структура данных игрока по умолчанию
+-- Структура данных игрока по умолчанию.
+-- ProfileService мерджит новые поля в старые профили автоматически: при
+-- добавлении полей (tutorialStep, firstSession в Phase 8) старые сейвы
+-- получают дефолты. Миграцию «опытный игрок не должен видеть туториал»
+-- делает TutorialManager на основе totalBlocksMined / totalCoinsEarned.
 local DEFAULT_DATA = {
     depth = 0,
     layer = "dirt",
@@ -54,6 +58,49 @@ local DEFAULT_DATA = {
     shaftsFound = {},
     playTime = 0,
     lastSave = 0,
+    -- Phase 8: онбординг.
+    -- tutorialStep: 0 = не начат, 1 = после первого клика, 2 = после первой
+    -- продажи, 3 = completed (не показывать туториал).
+    -- firstSession: true до первой выдачи STARTER_COINS, потом false навсегда —
+    -- защита от двойного начисления стартового бонуса.
+    tutorialStep = 0,
+    firstSession = true,
+    -- Phase 9 (rebirth / prestige).
+    -- rebirths: количество совершённых ребёртов (увеличивается на 1 в
+    --   RebirthManager после успешного сброса прогресса).
+    -- rebirthMultiplier: денормализованный кэш = 1 + rebirths * 0.1.
+    --   Лежит в профиле, чтобы SellInventory не считал формулу на каждой
+    --   продаже. Пересчитывается в RebirthManager:onProfileLoaded (на
+    --   случай ручной правки сейва или несоответствия).
+    rebirths = 0,
+    rebirthMultiplier = 1.0,
+    -- Phase 10 (Daily reward + Leaderboard).
+    -- dailyState: трекинг ежедневной награды.
+    --   lastClaimYday/lastClaimYear: 0/0 у новичка — DailyLogic.canClaim
+    --     вернёт true сразу при заходе, модал откроется автоматически.
+    --   currentStreak: 0..7. После Day 7 → обнуляется в 0, следующий claim
+    --     становится Day 1 (DailyLogic.streakToCycleDay).
+    --   totalDaysClaimed: pure-статистика.
+    dailyState = {
+        lastClaimYday = 0,
+        lastClaimYear = 0,
+        currentStreak = 0,
+        totalDaysClaimed = 0,
+    },
+    -- activeBoosts: temporary multipliers (выдаются Day 4/6/7 + dev /boost).
+    --   Истёкшие boost'ы чистятся PlayerBoosts.cleanup на onProfileLoaded и
+    --   на каждой продаже в SellInventory. expiresAt — os.time() unix.
+    activeBoosts = {},
+    -- leaderboardPlacement: кэш ранга игрока (обновляется LeaderboardManager).
+    --   coinsRank/depthRank: nil если игрок не в top-50.
+    --   coinsValue/depthValue: последнее значение, записанное в MemoryStore.
+    --     Используется для throttling: пишем только если delta >= writeThreshold.
+    leaderboardPlacement = {
+        coinsRank = nil,
+        depthRank = nil,
+        coinsValue = 0,
+        depthValue = 0,
+    },
 }
 
 -- Создать ProfileStore

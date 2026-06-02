@@ -7,13 +7,263 @@ local Logger = require(shared.util.Logger)
 local Constants = require(shared.constants)
 local UpgradeLogic = require(shared.util.UpgradeLogic)
 local Net = require(modules.Net)
+local OreLookup = require(script.Parent.OreLookup)
+local SoundManager = require(script.Parent.SoundManager)
+local CameraShake = require(script.Parent.CameraShake)
+local Haptics = require(script.Parent.Haptics)
+
+local TweenService = game:GetService("TweenService")
+local Debris = game:GetService("Debris")
+local RunService = game:GetService("RunService")
 
 local MiningRenderer = {}
 MiningRenderer.__index = MiningRenderer
 
 local BS = Constants.BLOCK_SIZE_STUDS
 local BSv = Vector3.new(BS, BS, BS)
-local TweenService = game:GetService("TweenService")
+local HOVER_BSv = BSv * 1.05
+
+-- ===== Phase 7: Mining-style juice helpers =====
+-- Принципы:
+--   1. Фидбек локализован в точке блока (chunks + dust + shockwave-сфера),
+--      а НЕ в глазах игрока (никакого fullscreen flash, никакого slow-mo).
+--   2. Camera shake — только на разрушении и только начиная с rare. На каждом
+--      hit'е и крите его НЕТ: игрок кликает 4 раза в секунду, любая тряска
+--      превращается в эпилептический припадок.
+--   3. Главный фидбек майнинга — coin-pop ("+5 💰"), вылетающий из блока.
+--      Это то, ради чего игрок копает, и именно это должно быть видно ярче всего.
+--   4. Chunks — настоящие Part'ы с физикой (gravity + LinearVelocity), а не
+--      sparkle-частицы. Это "руда разлетелась на куски", не "магия".
+
+-- Сколько физических осколков на break, по rarity. На каждом chunk'е GC висит
+-- через Debris, лимит подобран чтобы 50+ блоков подряд не разорвали FPS.
+local BREAK_CHUNK_COUNT = {
+    common = 6,
+    uncommon = 8,
+    rare = 12,
+    epic = 16,
+    legendary = 22,
+    mythic = 30,
+}
+local BREAK_DUST_COUNT = {
+    common = 8,
+    uncommon = 10,
+    rare = 14,
+    epic = 18,
+    legendary = 24,
+    mythic = 32,
+}
+local BREAK_CHUNK_SPEED = {
+    common = 10,
+    uncommon = 12,
+    rare = 14,
+    epic = 16,
+    legendary = 20,
+    mythic = 26,
+}
+-- Shockwave (расширяющаяся neon-сфера в точке блока). Локальный взрыв,
+-- видный только если игрок смотрит в его сторону — это сильнее «глобальной»
+-- screen-vignette, потому что подсказывает «что-то редкое произошло ЗДЕСЬ».
+-- nil = не показывать (common / uncommon).
+local SHOCKWAVE_BY_RARITY: { [string]: { size: number, duration: number } } = {
+    rare = { size = BS * 2.8, duration = 0.35 },
+    epic = { size = BS * 3.8, duration = 0.45 },
+    legendary = { size = BS * 5.5, duration = 0.55 },
+    mythic = { size = BS * 8.0, duration = 0.7 },
+}
+
+local function shortNumber(n: number): string
+    if n >= 1e6 then return string.format("%.1fM", n / 1e6)
+    elseif n >= 1e3 then return string.format("%.1fK", n / 1e3)
+    else return tostring(n) end
+end
+
+-- Shockwave: расширяющаяся neon-сфера. Это "ударная волна" в точке разрушения.
+-- Полностью локальный эффект — никаких ScreenGui, никаких CC-эффектов.
+local function shockwave(parent: Instance, position: Vector3, color: Color3, finalSize: number, duration: number)
+    local sphere = Instance.new("Part")
+    sphere.Shape = Enum.PartType.Ball
+    sphere.Size = Vector3.new(0.5, 0.5, 0.5)
+    sphere.Position = position
+    sphere.Anchored = true
+    sphere.CanCollide = false; sphere.CanTouch = false; sphere.CastShadow = false
+    sphere.Material = Enum.Material.ForceField -- "edge-glow" вид: видна только оболочка
+    sphere.Color = color
+    sphere.Transparency = 0.2
+    sphere.Parent = parent
+    TweenService:Create(sphere, TweenInfo.new(duration, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+        Size = Vector3.new(finalSize, finalSize, finalSize),
+        Transparency = 1,
+    }):Play()
+    Debris:AddItem(sphere, duration + 0.1)
+end
+
+-- Chunks: реальные Part'ы с физикой. Это и есть "руда разлетелась на куски" —
+-- ключевой mining-эффект. SmoothPlastic + цвет руды, gravity-affected, fade
+-- через Debris.
+local function chunkBurst(parent: Instance, position: Vector3, color: Color3, count: number, scatter: number)
+    local chunkSize = BS * 0.18
+    for _ = 1, count do
+        local size = chunkSize * (0.6 + math.random() * 0.7)
+        local chunk = Instance.new("Part")
+        chunk.Size = Vector3.new(size, size, size)
+        chunk.CFrame = CFrame.new(position + Vector3.new(
+            (math.random() - 0.5) * BS * 0.4,
+            (math.random() - 0.5) * BS * 0.4,
+            (math.random() - 0.5) * BS * 0.4
+        )) * CFrame.Angles(
+            math.random() * math.pi * 2,
+            math.random() * math.pi * 2,
+            math.random() * math.pi * 2
+        )
+        chunk.Anchored = false
+        chunk.CanCollide = false; chunk.CanTouch = false; chunk.CastShadow = false
+        chunk.Material = Enum.Material.SmoothPlastic
+        chunk.Color = color
+        chunk.Massless = true
+        chunk.Parent = parent
+
+        local dir = Vector3.new(
+            (math.random() - 0.5) * 2,
+            math.random() * 1.5 + 0.4, -- bias upward — куски летят "из" блока вверх
+            (math.random() - 0.5) * 2
+        )
+        if dir.Magnitude > 0 then
+            dir = dir.Unit
+        end
+        chunk.AssemblyLinearVelocity = dir * scatter
+        chunk.AssemblyAngularVelocity = Vector3.new(
+            (math.random() - 0.5) * 30,
+            (math.random() - 0.5) * 30,
+            (math.random() - 0.5) * 30
+        )
+
+        task.delay(0.7, function()
+            if chunk.Parent then
+                TweenService:Create(chunk, TweenInfo.new(0.5, Enum.EasingStyle.Quad), { Transparency = 1 }):Play()
+            end
+        end)
+        Debris:AddItem(chunk, 1.4)
+    end
+end
+
+-- Dust cloud: облако пыли цвета руды. Используется smoke_main (не sparkle) —
+-- даёт ощущение "блок осыпался", а не "магическая вспышка".
+local function dustCloud(host: BasePart, color: Color3, count: number, scale: number?)
+    local s = scale or 1
+    local e = Instance.new("ParticleEmitter")
+    e.Texture = "rbxasset://textures/particles/smoke_main.dds"
+    e.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, color),
+        ColorSequenceKeypoint.new(1, Color3.new(color.R * 0.45, color.G * 0.45, color.B * 0.45)),
+    })
+    e.LightEmission = 0
+    e.LightInfluence = 1
+    e.Rate = 0
+    e.Lifetime = NumberRange.new(0.5 * s, 1.0 * s)
+    e.Speed = NumberRange.new(2, 5 + 2 * s)
+    e.SpreadAngle = Vector2.new(180, 180)
+    e.Size = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 0.8 * s),
+        NumberSequenceKeypoint.new(1, 2.2 * s),
+    })
+    e.Transparency = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 0.35),
+        NumberSequenceKeypoint.new(0.6, 0.7),
+        NumberSequenceKeypoint.new(1, 1),
+    })
+    e.Rotation = NumberRange.new(0, 360)
+    e.RotSpeed = NumberRange.new(-90, 90)
+    e.VelocityInheritance = 0
+    e.Acceleration = Vector3.new(0, 1.5, 0) -- пыль чуть всплывает
+    e.Enabled = false
+    e.Parent = host
+    e:Emit(count)
+end
+
+-- Coin-pop: всплывающее "+X 💰" из позиции блока. Это сердце mining-feedback'а —
+-- игрок копает РАДИ ЭТОГО, и каждое разрушение должно показывать награду.
+local function coinPop(parent: Instance, position: Vector3, value: number, rarity: string)
+    if value <= 0 then return end
+    local host = Instance.new("Part")
+    host.Size = Vector3.new(0.1, 0.1, 0.1)
+    host.Anchored = true; host.CanCollide = false; host.CanTouch = false
+    host.Transparency = 1; host.Position = position; host.Parent = parent
+
+    local gui = Instance.new("BillboardGui")
+    gui.Size = UDim2.fromOffset(150, 44)
+    gui.StudsOffset = Vector3.new(0, 1.5, 0)
+    gui.AlwaysOnTop = true
+    gui.LightInfluence = 0
+    gui.Parent = host
+
+    local isBig = rarity == "rare" or rarity == "epic" or rarity == "legendary" or rarity == "mythic"
+    local l = Instance.new("TextLabel")
+    l.Size = UDim2.fromScale(1, 1)
+    l.BackgroundTransparency = 1
+    l.Text = "+" .. shortNumber(value) .. " 💰"
+    l.Font = Enum.Font.GothamBlack
+    l.TextSize = isBig and 28 or 22
+    l.TextColor3 = Color3.fromRGB(255, 215, 90)
+    l.TextStrokeTransparency = 0
+    l.TextStrokeColor3 = Color3.fromRGB(40, 25, 0)
+    l.Parent = gui
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(80, 50, 0)
+    stroke.Thickness = isBig and 2 or 1.5
+    stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual
+    stroke.Parent = l
+
+    -- Bounce-in (mining-сим читается мягко, без шутерного overshoot).
+    l.TextSize = 1
+    TweenService:Create(l, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+        TextSize = isBig and 28 or 22,
+    }):Play()
+
+    local startedAt = os.clock()
+    local TOTAL = 1.3
+    local HOLD = 0.7
+    local conn
+    conn = RunService.Heartbeat:Connect(function()
+        local el = os.clock() - startedAt
+        if el > TOTAL then
+            conn:Disconnect()
+            if host.Parent then host:Destroy() end
+            return
+        end
+        gui.StudsOffset = Vector3.new(0, 1.5 + el * 3.2, 0)
+        if el > HOLD then
+            local a = (el - HOLD) / (TOTAL - HOLD)
+            l.TextTransparency = a
+            stroke.Transparency = a
+        end
+    end)
+end
+
+-- Block squash: блок чуть приплющивается при ударе и упруго возвращается.
+-- Это замена camera shake на hit'е — фидбек идёт от самого блока, не от глаз.
+local function blockSquash(part: BasePart)
+    if part:GetAttribute("_destroying") then return end
+    if part:GetAttribute("_squashing") then return end
+    part:SetAttribute("_squashing", true)
+    local squashed = Vector3.new(BS * 1.07, BS * 0.88, BS * 1.07)
+    local rest = part:GetAttribute("_hovered") and HOVER_BSv or BSv
+    local t1 = TweenService:Create(part, TweenInfo.new(0.05, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Size = squashed })
+    t1:Play()
+    t1.Completed:Once(function()
+        if part:GetAttribute("_destroying") then
+            part:SetAttribute("_squashing", false)
+            return
+        end
+        local target = part:GetAttribute("_hovered") and HOVER_BSv or rest
+        local t2 = TweenService:Create(part, TweenInfo.new(0.09, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Size = target })
+        t2:Play()
+        t2.Completed:Once(function()
+            part:SetAttribute("_squashing", false)
+        end)
+    end)
+end
 
 local function formatHP(hp, maxHp)
     local function s(n)
@@ -23,26 +273,6 @@ local function formatHP(hp, maxHp)
     end
     return s(hp) .. " / " .. s(maxHp)
 end
-
-local ORE_C = {
-    dirt = Color3.fromRGB(160, 120, 70), pebble = Color3.fromRGB(180, 180, 180),
-    clay = Color3.fromRGB(210, 175, 130), coal = Color3.fromRGB(40, 40, 45),
-    root = Color3.fromRGB(110, 65, 35), fossil = Color3.fromRGB(235, 210, 160),
-    stone = Color3.fromRGB(145, 145, 150), copper = Color3.fromRGB(200, 120, 50),
-    iron = Color3.fromRGB(195, 155, 105), silver = Color3.fromRGB(200, 210, 220),
-    gold = Color3.fromRGB(255, 210, 50), sapphire = Color3.fromRGB(40, 110, 235),
-    ruby = Color3.fromRGB(235, 35, 85),
-}
-local ORE_R = {
-    dirt = "common", pebble = "common", clay = "common", coal = "uncommon",
-    root = "rare", fossil = "rare", stone = "common", copper = "uncommon",
-    iron = "uncommon", silver = "rare", gold = "rare", sapphire = "epic", ruby = "epic",
-}
-local RAR_C = {
-    common = Color3.fromRGB(180,180,180), uncommon = Color3.fromRGB(100,200,100),
-    rare = Color3.fromRGB(60,140,255), epic = Color3.fromRGB(180,60,220),
-    legendary = Color3.fromRGB(255,160,0), mythic = Color3.fromRGB(255,50,50),
-}
 
 function MiningRenderer.new()
     local self = setmetatable({}, MiningRenderer)
@@ -98,7 +328,7 @@ function MiningRenderer:_createPart(x, z, y, oreId, hp, maxHp)
     part.Name = key; part.Size = BSv; part.Anchored = true
     part.CanCollide = true; part.CanTouch = false; part.CastShadow = true
     part.Material = Enum.Material.SmoothPlastic; part.Reflectance = 0.05
-    part.BrickColor = BrickColor.new(ORE_C[oreId] or Color3.fromRGB(140, 140, 150))
+    part.BrickColor = BrickColor.new(OreLookup.getColor(oreId))
     part.Parent = self._parent
     local px = x * BS; local pz = z * BS + 30
     local py = -(y * BS + BS / 2)
@@ -114,6 +344,10 @@ function MiningRenderer:_createPart(x, z, y, oreId, hp, maxHp)
     hpGui.Parent = part
 
     det.MouseHoverEnter:Connect(function()
+        -- Если блок уже начал разрушаться — никаких эффектов hover,
+        -- они конфликтуют с shrink/fade-tween'ом из _animateDestroy.
+        if part:GetAttribute("_destroying") then return end
+        part:SetAttribute("_hovered", true)
         if self._showHPBar then hpGui.Enabled = true end
         local light = Instance.new("PointLight")
         light.Name = "HoverLight"; light.Brightness = 1.2; light.Range = 6
@@ -121,25 +355,42 @@ function MiningRenderer:_createPart(x, z, y, oreId, hp, maxHp)
         local sel = Instance.new("SelectionBox")
         sel.Name = "HoverSel"; sel.Adornee = part; sel.LineThickness = 0.04
         sel.Color3 = Color3.fromRGB(255, 230, 120); sel.SurfaceTransparency = 0.9; sel.Parent = part
+
+        -- Лёгкий "приподнимаем" блок при наведении (Size = BSv * 1.05).
+        -- TweenService автоматически отменит предыдущий tween на этом
+        -- свойстве, а гард на _destroying гарантирует, что мы не оживим
+        -- умирающий блок. _hovered нужен blockSquash'у, чтобы знать к
+        -- какому размеру возвращаться после приплющивания.
+        if not part:GetAttribute("_squashing") then
+            local t = TweenService:Create(part, TweenInfo.new(0.1, Enum.EasingStyle.Quad), { Size = HOVER_BSv })
+            t:Play()
+        end
     end)
     det.MouseHoverLeave:Connect(function()
+        part:SetAttribute("_hovered", false)
         hpGui.Enabled = false
         local li = part:FindFirstChild("HoverLight"); if li then li:Destroy() end
         local sel = part:FindFirstChild("HoverSel"); if sel then sel:Destroy() end
+        if part:GetAttribute("_destroying") then return end
+        if not part:GetAttribute("_squashing") then
+            local t = TweenService:Create(part, TweenInfo.new(0.1, Enum.EasingStyle.Quad), { Size = BSv })
+            t:Play()
+        end
     end)
 
-    local rar = ORE_R[oreId] or "common"
+    local rar = OreLookup.getRarity(oreId)
+    local rarColor = OreLookup.getRarityColor(oreId)
     local tag = Instance.new("BillboardGui"); tag.Size = UDim2.fromOffset(50, 6)
     tag.StudsOffset = Vector3.new(0, 3.2, 0); tag.AlwaysOnTop = true
     tag.ClipsDescendants = false; tag.Enabled = self._showRarity
     local bar = Instance.new("Frame"); bar.Size = UDim2.fromScale(1, 1)
-    bar.BackgroundColor3 = RAR_C[rar] or RAR_C.common; bar.BorderSizePixel = 0; bar.BackgroundTransparency = 0.1
+    bar.BackgroundColor3 = rarColor; bar.BorderSizePixel = 0; bar.BackgroundTransparency = 0.1
     Instance.new("UICorner", bar).CornerRadius = UDim.new(0, 3); bar.Parent = tag; tag.Parent = part
 
     if rar == "epic" or rar == "legendary" or rar == "mythic" then
         local sp = Instance.new("ParticleEmitter")
         sp.Texture = "rbxasset://textures/particles/sparkle_main.dds"
-        sp.Color = ColorSequence.new(RAR_C[rar] or Color3.new(1, 1, 1))
+        sp.Color = ColorSequence.new(rarColor)
         sp.Rate = 6 + (rar == "mythic" and 8 or rar == "legendary" and 4 or 2)
         sp.Lifetime = NumberRange.new(1.5, 3.0); sp.Speed = NumberRange.new(0.2, 0.8)
         sp.SpreadAngle = Vector2.new(40, 40); sp.VelocityInheritance = 0; sp.Enabled = true
@@ -163,35 +414,96 @@ end
 
 function MiningRenderer:_hitParticles(key, oreId)
     local p = self._parts[key]; if not p then return end
-    local e = Instance.new("ParticleEmitter")
-    e.Texture = "rbxasset://textures/particles/sparkle_main.dds"
-    e.Color = ColorSequence.new(ORE_C[oreId] or Color3.fromRGB(200, 200, 200))
-    e.Rate = 0; e.Lifetime = NumberRange.new(0.2, 0.5); e.Speed = NumberRange.new(3, 10)
-    e.VelocityInheritance = 0; e.Enabled = false; e.Parent = p; e:Emit(8)
-    task.delay(0.8, function() e:Destroy() end)
+    local color = OreLookup.getColor(oreId)
+    -- Мягкое облако пыли (4 частицы — лёгкий puff, не магия)
+    dustCloud(p, color, 4, 0.7)
+    -- Маленький разлёт chunks (4 осколка) — игрок видит, что "что-то откололось"
+    chunkBurst(self._parent, p.Position, color, 4, 7)
 end
 
 function MiningRenderer:_breakEffect(key, oreId)
     local p = self._parts[key]; if not p then return end
     local pos = p.Position
-    local flash = Instance.new("Part"); flash.Size = BSv; flash.Anchored = true
-    flash.CanCollide = false; flash.Transparency = 0; flash.Material = Enum.Material.Neon
-    flash.Color = ORE_C[oreId] or Color3.new(1, 1, 1); flash.Position = pos; flash.Parent = self._parent
-    TweenService:Create(flash, TweenInfo.new(0.3, Enum.EasingStyle.Quint), { Transparency = 1, Size = BSv * 1.5 }):Play()
-    task.delay(0.35, function() flash:Destroy() end)
-    local e = Instance.new("ParticleEmitter")
-    e.Texture = "rbxasset://textures/particles/sparkle_main.dds"
-    e.Color = ColorSequence.new(ORE_C[oreId] or Color3.fromRGB(255, 255, 255))
-    e.Rate = 0; e.Lifetime = NumberRange.new(0.3, 0.8); e.Speed = NumberRange.new(4, 14)
-    e.VelocityInheritance = 0; e.Enabled = false; e.Parent = self._parent; e:Emit(20)
-    task.delay(1.2, function() if e then e:Destroy() end end)
+    local oreColor = OreLookup.getColor(oreId)
+    local rarity = OreLookup.getRarity(oreId)
+    local rarityColor = OreLookup.getRarityColor(oreId)
+
+    -- 1. Главный эффект: разлетающиеся chunks с физикой. Это и есть "блок
+    --    разлетелся на куски". Без них любой mining ощущается как клик по
+    --    дидактическому квадрату.
+    local chunkCount = BREAK_CHUNK_COUNT[rarity] or 6
+    local scatter = BREAK_CHUNK_SPEED[rarity] or 10
+    chunkBurst(self._parent, pos, oreColor, chunkCount, scatter)
+
+    -- 2. Облако пыли (большое и долгое для редких руд).
+    local dustHost = Instance.new("Part")
+    dustHost.Size = Vector3.new(0.1, 0.1, 0.1)
+    dustHost.Position = pos
+    dustHost.Anchored = true; dustHost.CanCollide = false; dustHost.CanTouch = false
+    dustHost.Transparency = 1; dustHost.Parent = self._parent
+    local dustScale = if rarity == "mythic" then 1.6
+        elseif rarity == "legendary" then 1.4
+        elseif rarity == "epic" then 1.2
+        else 1.0
+    dustCloud(dustHost, oreColor, BREAK_DUST_COUNT[rarity] or 8, dustScale)
+    Debris:AddItem(dustHost, 2.5)
+
+    -- 3. Shockwave-сфера ЦВЕТА РЕДКОСТИ для rare+. Локальный взрыв в точке,
+    --    видно издалека. Mythic получает второе золотое кольцо с задержкой
+    --    0.15с — двухслойный «бабах» читается как «легендарное событие».
+    local shock = SHOCKWAVE_BY_RARITY[rarity]
+    if shock then
+        shockwave(self._parent, pos, rarityColor, shock.size, shock.duration)
+        if rarity == "mythic" then
+            task.delay(0.15, function()
+                shockwave(self._parent, pos, Color3.fromRGB(255, 215, 90), BS * 5.5, 0.55)
+            end)
+        end
+    end
 end
 
 function MiningRenderer:_animateDestroy(key)
     local p = self._parts[key]; if not p then return end
     if p:GetAttribute("_destroying") then return end
     p:SetAttribute("_destroying", true)
-    local d = self._blockData[key]; self:_breakEffect(key, d and d.oreId or "dirt")
+
+    local d = self._blockData[key]
+    local oreId = d and d.oreId or "dirt"
+    local rarity = OreLookup.getRarity(oreId)
+    local pos = p.Position
+
+    self:_breakEffect(key, oreId)
+
+    -- Coin-pop: главный mining-фидбек. Игрок копает за награду, и она
+    -- должна вылетать из блока, а не считаться где-то в HUD молча.
+    local def = OreLookup.getDef(oreId)
+    local value = (def and def.value) or 0
+    coinPop(self._parent, pos + Vector3.new(0, 0.5, 0), value, rarity)
+
+    -- 3D-звук разрушения в точке блока.
+    SoundManager.playForOre("break", oreId, rarity, pos)
+
+    -- Camera shake — только для rare+, mythic с легендарным пресетом.
+    -- Common/uncommon разрушение НЕ трясёт камеру: 80% копания идёт по
+    -- ним, любая тряска утомляет.
+    if rarity == "mythic" then
+        CameraShake.shakePreset("legendary_break")
+        Haptics.pulse("legendary_break")
+    elseif rarity == "legendary" then
+        CameraShake.shakePreset("legendary_break")
+        Haptics.pulse("legendary_break")
+    elseif rarity == "epic" then
+        CameraShake.shakePreset("break")
+        Haptics.pulse("break")
+    elseif rarity == "rare" then
+        CameraShake.shakePreset("rare_break")
+        Haptics.pulse("break")
+    else
+        -- common/uncommon: только звук + chunks + dust, без shake.
+        -- Haptics на телефоне даём лёгкий — небольшая отдача от удачного выноса.
+        Haptics.pulse("hit")
+    end
+
     local cf = p.CFrame
     TweenService:Create(p, TweenInfo.new(0.25, Enum.EasingStyle.Quint), { Size = Vector3.new(0.1, 0.1, 0.1), Transparency = 0.8 }):Play()
     TweenService:Create(p, TweenInfo.new(0.25, Enum.EasingStyle.Quint), { CFrame = cf * CFrame.new(0, -BS/2, 0) }):Play()
@@ -207,23 +519,90 @@ function MiningRenderer:_animateDestroy(key)
     end)
 end
 
-function MiningRenderer:_dmgNumber(key, dmg, crit)
+function MiningRenderer:_dmgNumber(key, dmg, crit, oreId)
     local p = self._parts[key]; if not p then return end
-    local gui = Instance.new("BillboardGui"); gui.Size = UDim2.fromOffset(120, 50)
-    gui.StudsOffset = Vector3.new(0, 3.5, 0); gui.AlwaysOnTop = true; gui.ClipsDescendants = false
-    local l = Instance.new("TextLabel"); l.Size = UDim2.fromScale(1, 1); l.BackgroundTransparency = 1
-    l.Text = tostring(dmg); l.Font = Enum.Font.GothamBlack
-    l.TextSize = if crit then 42 else 30
-    l.TextColor3 = if crit then Color3.fromRGB(255, 230, 50) else Color3.fromRGB(255, 255, 255)
-    l.TextStrokeTransparency = 0.2; l.TextStrokeColor3 = Color3.new(0, 0, 0); l.Parent = gui; gui.Parent = p
-    l.TextTransparency = 1
-    TweenService:Create(l, TweenInfo.new(0.1, Enum.EasingStyle.Back), { TextTransparency = 0 }):Play()
-    local st, conn = tick()
-    conn = game:GetService("RunService").Heartbeat:Connect(function()
-        local el = tick() - st; if el > 1.0 then conn:Disconnect(); gui:Destroy(); return end
-        if el > 0.3 then l.TextTransparency = (el - 0.3) / 0.7 end
+    local d = self._blockData[key]
+    oreId = oreId or (d and d.oreId) or "dirt"
+
+    -- Размер скейлится от damage относительно maxHp: один тычок по
+    -- mythic-блоку (1% хп) — мелкая цифра; вынос common-блока — крупная.
+    local maxHp = d and d.maxHp or 1
+    local ratio = math.clamp(dmg / math.max(maxHp, 1), 0.05, 1.0)
+    local baseSize = if crit then 42 else 30
+    local finalSize = math.floor(baseSize * (0.8 + ratio * 0.6) + 0.5)
+    if crit then
+        finalSize = math.floor(finalSize * 1.4 + 0.5)
+    end
+
+    local color
+    if crit then
+        color = Color3.fromRGB(255, 230, 50) -- золото
+    else
+        color = OreLookup.getColor(oreId)
+    end
+    -- Контрастная обводка: тёмная для светлых руд, светлая для тёмных.
+    local lum = color.R * 0.299 + color.G * 0.587 + color.B * 0.114
+    local strokeColor = if lum > 0.55 then Color3.new(0, 0, 0) else Color3.fromRGB(35, 25, 5)
+
+    local gui = Instance.new("BillboardGui")
+    gui.Size = UDim2.fromOffset(160, 70)
+    gui.StudsOffset = Vector3.new(0, 3.5, 0)
+    gui.AlwaysOnTop = true; gui.ClipsDescendants = false
+    gui.LightInfluence = 0
+
+    local l = Instance.new("TextLabel")
+    l.Size = UDim2.fromScale(1, 1); l.BackgroundTransparency = 1
+    l.Text = tostring(dmg)
+    l.Font = Enum.Font.GothamBlack
+    l.TextSize = 1 -- стартуем с минимума, разворачиваемся в finalSize за 0.1с (Quad/Out)
+    l.TextColor3 = color
+    l.TextStrokeTransparency = 0
+    l.TextStrokeColor3 = strokeColor
+
+    -- Доп. внешний контур через UIStroke: жирная читаемая цифра поверх
+    -- любого цвета блока (TextStrokeTransparency сам по себе тонок).
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = strokeColor
+    stroke.Thickness = if crit then 3 else 2
+    stroke.Transparency = 0
+    stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual
+    stroke.Parent = l
+
+    l.Parent = gui; gui.Parent = p
+
+    -- Pop-in: 0 → finalSize за 0.1с (Quad/Out — мягко, без шутерного overshoot).
+    TweenService:Create(l, TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+        TextSize = finalSize,
+    }):Play()
+
+    local st = os.clock()
+    local TOTAL = 0.85
+    local HOLD = 0.35 -- сколько держим полную видимость до fade
+    local conn
+    conn = RunService.Heartbeat:Connect(function()
+        local el = os.clock() - st
+        if el > TOTAL then
+            conn:Disconnect()
+            gui:Destroy()
+            return
+        end
+        if el > HOLD then
+            local alpha = (el - HOLD) / (TOTAL - HOLD)
+            l.TextTransparency = alpha
+            stroke.Transparency = alpha
+        end
         gui.StudsOffset = Vector3.new(0, 3.5 + el * 4, 0)
     end)
+end
+
+function MiningRenderer:_critEffect(key)
+    local p = self._parts[key]; if not p then return end
+    local gold = Color3.fromRGB(255, 215, 90)
+    -- Золотое расширяющееся кольцо — заменяет шутерный slow-mo, локальный эффект.
+    shockwave(self._parent, p.Position, gold, BS * 2.6, 0.4)
+    -- Золотые chunks: 6 кусков "удар выбил золото". Меньше частиц чем у break,
+    -- т.к. сам блок ещё цел.
+    chunkBurst(self._parent, p.Position, gold, 6, 12)
 end
 
 function MiningRenderer:_onClick(key, x, z, y)
@@ -239,8 +618,29 @@ function MiningRenderer:_onClick(key, x, z, y)
     if r.damage then
         local cached = self._blockData[key]
         local oreId = (r.oreDef and r.oreDef.id) or (cached and cached.oreId) or "dirt"
-        self:_dmgNumber(key, r.damage, r.crit or false)
+        local rarity = OreLookup.getRarity(oreId)
+        local isCrit = r.crit or false
+        local part = self._parts[key]
+        local pos = part and part.Position or nil
+
+        self:_dmgNumber(key, r.damage, isCrit, oreId)
         self:_hitParticles(key, oreId)
+        if part then
+            blockSquash(part) -- замена шутерному camera shake на hit
+        end
+
+        -- 3D-звук в точке блока. Haptics — мягкий на каждом hit, выраженный
+        -- на крите. НИКАКОГО camera shake и НИКАКОГО slow-mo на ударе:
+        -- в mining-сим игрок кликает 4 раза/сек, любой shake/freeze превращает
+        -- картинку в кашу.
+        SoundManager.playForOre("hit", oreId, rarity, pos)
+        Haptics.pulse("hit")
+
+        if isCrit then
+            self:_critEffect(key)
+            SoundManager.play("crit", pos)
+            Haptics.pulse("crit") -- сверху hit-пульса, как «двойной тык»
+        end
     end
     -- Оптимистично обновляем HP-бар, чтобы цифра реагировала без ожидания
     -- delta. Сервер всё равно пришлёт то же значение через SyncBlocks —

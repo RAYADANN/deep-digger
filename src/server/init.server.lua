@@ -10,7 +10,7 @@ local Logger = require(shared.util.Logger)
 local Constants = require(shared.constants)
 local LayerUtil = require(shared.util.LayerUtil)
 local Net = require(modules.Net)
-local OreDatabase = require(script.core.OreDatabase)
+local OreDatabase = require(shared.data.OreDatabase)
 local ProfileManager = require(script.core.ProfileManager)
 local MiningEngine = require(script.core.MiningEngine)
 local EconomyManager = require(script.core.EconomyManager)
@@ -18,33 +18,60 @@ local MiningLoot = require(script.core.MiningLoot)
 local AntiCheat = require(script.core.AntiCheat)
 local Leaderboard = require(script.core.Leaderboard)
 local DevCommands = require(script.core.DevCommands)
+local TutorialManager = require(script.core.TutorialManager)
+local RebirthManager = require(script.core.RebirthManager)
+local DailyReward = require(script.core.DailyReward)
+local PlayerBoosts = require(script.core.PlayerBoosts)
 
 local log = Logger.new("Server:Init")
 
 -- Дефолтный FallenPartsDestroyHeight = -500: персонаж умирает на глубине
--- ~110 м (BLOCK_SIZE_STUDS = 4.5). Шахта у нас бесконечная вниз,
--- поэтому опускаем порог практически в минус бесконечность.
-workspace.FallenPartsDestroyHeight = -1e6
+-- ~110 м (BLOCK_SIZE_STUDS = 4.5). Шахта у нас бесконечная вниз, поэтому
+-- порог опускаем до -50000 студов — это лимит Roblox для этого свойства
+-- (single-precision floats теряют точность ниже).
+--
+-- -50000 / 4.5 ≈ 11 110 блоков глубины — больше чем когда-либо понадобится:
+-- void-слой начинается на y=1200, дальше — пост-MVP контент.
+--
+-- В новой capability-модели Roblox это свойство read-only из server-скрипта
+-- (нужен Plugin-capability). Правильное место — Studio Properties панель
+-- Workspace.FallenPartsDestroyHeight = -50000 (значение сохранится в .rbxl).
+-- Здесь оставлен pcall-фолбэк на случай, если контекст имеет права
+-- (Run Mode, плагин-окружение): попытка не критична, ошибки не должны
+-- валить сервер.
+pcall(function()
+    workspace.FallenPartsDestroyHeight = -50000
+end)
 
 -- Инициализация модулей
 local oreDb = OreDatabase.new()
 local profileManager = ProfileManager.new()
 local miningEngine = MiningEngine.new(oreDb:getAll())
 local antiCheat = AntiCheat.new()
-local leaderboard = Leaderboard.new()
 
 local remoteSync = Net:RemoteEvent("SyncBlocks")
 local remoteStats = Net:RemoteEvent("PlayerStats")
 local remoteInv = Net:RemoteEvent("PlayerInventory")
 local remoteNotify = Net:RemoteEvent("Notify")
 
-local function notify(player: Player, payload: { text: string, color: { r: number, g: number, b: number }?, icon: string?, duration: number? })
+-- Phase 9: payload.kind — опциональный «тип» нотификации. Клиент использует
+-- его для запуска специфичных FX (kind="rebirth" → RebirthFX.burst()).
+-- Notification.show игнорирует это поле, поэтому обратной совместимости не
+-- ломаем.
+type NotifyPayload = {
+    text: string,
+    color: { r: number, g: number, b: number }?,
+    icon: string?,
+    duration: number?,
+    kind: string?,
+}
+local function notify(player: Player, payload: NotifyPayload)
     remoteNotify:FireClient(player, payload)
 end
 
 local NOTIFY_COOLDOWN = 4
 local lastNotifyAt: { [string]: number } = {}
-local function notifyOnce(player: Player, key: string, payload: { text: string, color: { r: number, g: number, b: number }?, icon: string?, duration: number? })
+local function notifyOnce(player: Player, key: string, payload: NotifyPayload)
     local id = key .. "_" .. player.UserId
     local now = os.clock()
     if lastNotifyAt[id] and now - lastNotifyAt[id] < NOTIFY_COOLDOWN then
@@ -124,6 +151,9 @@ local function flushDelta(player: Player, agg: BlockDeltaAgg)
     })
 end
 
+-- Phase 10: shared/util модули — формулы для daily-стейта в payload'е.
+local DailyLogic = require(shared.util.DailyLogic)
+
 local function buildHudPayload(playerData)
     local invList = {}
     for oreId, count in pairs(playerData.inventory or {}) do
@@ -131,6 +161,28 @@ local function buildHudPayload(playerData)
             table.insert(invList, { oreId = oreId, count = count })
         end
     end
+    -- Phase 10: формируем dailyState для клиента.
+    --   * canClaim — true если игрок может забрать сегодня.
+    --   * currentStreak — текущий стрик (для отображения «🔥 N» в StreakChip).
+    --   * nextDay — какой день будет при следующем claim'е (DailyRewardModal
+    --     подсветит эту карточку).
+    --   * secondsUntilNextDay — для countdown'a «Следующая через 23ч 14м».
+    local dailyStateRaw = playerData.dailyState or {}
+    local canClaim = DailyLogic.canClaim(dailyStateRaw)
+    local nextStreak = DailyLogic.nextStreak(dailyStateRaw)
+    local nextDay = DailyLogic.streakToCycleDay(nextStreak)
+    local until_ = DailyLogic.timeUntilNextDay()
+    local dailyStatePayload = {
+        canClaim = canClaim,
+        currentStreak = dailyStateRaw.currentStreak or 0,
+        nextDay = nextDay,
+        totalDaysClaimed = dailyStateRaw.totalDaysClaimed or 0,
+        secondsUntilNextDay = until_.total,
+    }
+    -- Phase 10: serialize active boosts для BoostChip. remaining (в сек) —
+    -- единственная вещь, по которой клиент тикает локально (server os.time
+    -- не nudge'ит каждую секунду).
+    local activeBoostsPayload = PlayerBoosts.toPayloadList(playerData.activeBoosts)
     return {
         coins = playerData.coins or 0,
         gems = 0,
@@ -146,6 +198,24 @@ local function buildHudPayload(playerData)
         totalCoinsEarned = playerData.totalCoinsEarned or 0,
         bossesDefeated = playerData.bossesDefeated or 0,
         maxDepthReached = playerData.maxDepthReached or 0,
+        -- Phase 8: текущий шаг туториала. Клиент по нему решает «показывать
+        -- ли подсказки». firstSession не отдаётся клиенту — это
+        -- внутренний серверный флаг.
+        tutorialStep = playerData.tutorialStep or 0,
+        -- Phase 9: prestige. rebirths используется RebirthPanel /
+        -- StatsPanel / TopBar-chip; rebirthMultiplier — справочно для
+        -- описания «теперь x1.X», основные расчёты идут на сервере в
+        -- SellInventory.
+        rebirths = playerData.rebirths or 0,
+        rebirthMultiplier = playerData.rebirthMultiplier
+            or (1 + (playerData.rebirths or 0) * 0.1),
+        -- Phase 10: retention-state.
+        dailyState = dailyStatePayload,
+        activeBoosts = activeBoostsPayload,
+        leaderboardPlacement = playerData.leaderboardPlacement or {
+            coinsRank = nil, depthRank = nil,
+            coinsValue = 0, depthValue = 0,
+        },
     }
 end
 
@@ -197,16 +267,68 @@ Net:Handle("UpdateDepth", function(player: Player, depth: number)
     processDepthUpdate(player, depth)
 end)
 
+-- Phase 10: Leaderboard поднимаем РАНЬШЕ EconomyManager, чтобы передать
+-- его write-хук в onEconomyChanged. После каждой продажи / ребёрта
+-- writeIfChanged через MemoryStoreSortedMap апдейтит глобальный топ.
+local leaderboard = Leaderboard.new({
+    profileManager = profileManager,
+    onProfileChanged = syncPlayerHud,
+})
+
+-- Phase 10: combined hook — syncPlayerHud + leaderboard:writeIfChanged.
+-- Обёртку держим тут (а не в EconomyManager), чтобы EconomyManager не
+-- знал про лидерборд (изоляция Phase 3).
+local function onEconomyChanged(player: Player)
+    syncPlayerHud(player)
+    leaderboard:writeIfChanged(player)
+end
+
 local economyManager = EconomyManager.new({
     profileManager = profileManager,
     oreDatabase = oreDb,
-    onEconomyChanged = syncPlayerHud,
+    onEconomyChanged = onEconomyChanged,
+})
+
+local tutorialManager = TutorialManager.new({
+    profileManager = profileManager,
+    onProfileChanged = syncPlayerHud,
+    notify = notify,
+})
+
+-- Phase 9: prestige-петля. onResetBlocks ресетит визуальный slice шахты,
+-- чтобы после ребёрта игрок видел свежий ландшафт (а не уже разрушенные
+-- блоки). MiningEngine:resetPlayer стирает данные, sendBlocksSnapshot
+-- доставляет новый snapshot клиенту. onProfileChanged тут включает
+-- leaderboard:writeIfChanged — после ребёрта totalCoinsEarned остаётся,
+-- но depth обнуляется; писать в лидерборд не критично, но полезно для
+-- depth-доски.
+local rebirthManager = RebirthManager.new({
+    profileManager = profileManager,
+    onProfileChanged = onEconomyChanged,
+    notify = notify,
+    onResetBlocks = function(player: Player)
+        miningEngine:resetPlayer(player)
+        sendBlocksSnapshot(player)
+    end,
+})
+
+-- Phase 10: daily reward retention-петля. Использует тот же syncPlayerHud,
+-- что и остальные модули; leaderboard не пишется при daily (totalCoinsEarned
+-- растёт от claim'а монет, и следующая продажа всё равно дёрнет write).
+local dailyReward = DailyReward.new({
+    profileManager = profileManager,
+    onProfileChanged = syncPlayerHud,
+    notify = notify,
 })
 
 DevCommands.new({
     profileManager = profileManager,
     onEconomyChanged = syncPlayerHud,
     notify = notify,
+    tutorialManager = tutorialManager,
+    rebirthManager = rebirthManager,
+    dailyReward = dailyReward,
+    leaderboard = leaderboard,
 })
 
 --[[
@@ -319,13 +441,41 @@ local function onPlayerAdded(player: Player)
     -- 2. Ждём клиент
     task.wait(2)
 
-    -- 3. Полный snapshot блоков для начального состояния клиента
+    -- 3a. Phase 9: пересчитать rebirthMultiplier из rebirths. Идемпотентно;
+    --   делается раньше Tutorial-хука, чтобы первый HUD-пейлоад содержал
+    --   уже актуальный множитель (RebirthPanel читает его при первом рендере).
+    rebirthManager:onProfileLoaded(player)
+
+    -- 3b. Phase 10: чистим истёкшие boost'ы. Если игрок зашёл через сутки
+    --   после daily-claim Day 7, его x2 boost уже истёк — UI не должен
+    --   показать «⚡ x2 · -200с».
+    if playerData.activeBoosts then
+        PlayerBoosts.cleanup(playerData.activeBoosts)
+    end
+
+    -- 3c. Phase 8: миграция опытных + первый бонус. ВАЖНО делать ДО snapshot/HUD,
+    --   чтобы стартовые монеты уже были в первом PlayerStats-пейлоаде.
+    --   notify() ниже всё равно успеет — Net:RemoteEvent буферизуется до того
+    --   как клиент сделает Net:Connect (PlayerScripts стартует раньше).
+    tutorialManager:onProfileLoaded(player)
+
+    -- 3d. Phase 10: daily-availability notify. Тост шлётся ТОЛЬКО если
+    --   игрок может claim'нуть сегодня (новый день / никогда не забирал).
+    --   Сам модал откроется клиентом по dailyState.canClaim в первом
+    --   PlayerStats-пейлоаде или по kind="daily_available" в Notify.
+    dailyReward:onProfileLoaded(player)
+
+    -- 4. Полный snapshot блоков для начального состояния клиента
     sendBlocksSnapshot(player)
 
-    -- 4. Отправляем данные на HUD
+    -- 5. Отправляем данные на HUD
     syncPlayerHud(player)
 
-    -- 5. Автосохранение
+    -- 6. Phase 10: первая запись в глобальный лидерборд. Если игрок —
+    --   опытный (totalCoinsEarned > 0), он сразу появится в топе.
+    leaderboard:writeIfChanged(player)
+
+    -- 7. Автосохранение
     task.spawn(function()
         while player.Parent do
             task.wait(Constants.AUTOSAVE_INTERVAL)
@@ -344,6 +494,8 @@ local function onPlayerRemoving(player: Player)
         data.depth = 0
         data.layer = "dirt"
     end
+    -- Phase 10: финальная запись в лидерборд + cleanup throttle-state.
+    leaderboard:onPlayerLeaving(player)
     profileManager:saveProfile(player)
     antiCheat:reset(player)
     miningEngine:resetPlayer(player)

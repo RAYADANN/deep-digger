@@ -6,7 +6,8 @@ local Fusion = require(ReplicatedStorage:WaitForChild("Packages").Fusion)
 local ScopeFactory = require(script.Parent.Parent.ScopeFactory)
 local theme = require(script.Parent.Parent.theme)
 local Formatters = require(script.Parent.Parent.formatters)
-local OreCatalog = require(script.Parent.Parent.OreCatalog)
+-- script.Parent.Parent.Parent.Parent = client (StarterGui.client → PlayerScripts.client)
+local OreLookup = require(script.Parent.Parent.Parent.Parent.core.OreLookup)
 
 local OnEvent = Fusion.OnEvent
 local Children = Fusion.Children
@@ -21,9 +22,9 @@ export type Props = {
 local InvSlot = {}
 
 function InvSlot.create(s: ScopeFactory.HudScope, props: Props)
-    local rarity = OreCatalog.getRarity(props.oreId)
+    local rarity = OreLookup.getRarity(props.oreId)
     local rarityColor = RARITY_COLOR[rarity] or C.common
-    local icon = OreCatalog.getIcon(props.oreId)
+    local icon = OreLookup.getIcon(props.oreId)
     local hovered = s:Value(false)
 
     return s:New("Frame")({

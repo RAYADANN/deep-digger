@@ -8,6 +8,32 @@ export type InventoryEntry = { oreId: string, count: number }
 
 export type UpgradeLevels = { [string]: { level: number } }
 
+-- Phase 10: payload-секции для daily / boosts / leaderboard. Сервер
+-- (init.server.lua buildHudPayload) формирует их через DailyLogic /
+-- PlayerBoosts.toPayloadList. Клиент сюда складывает as-is, без логики.
+export type DailyStatePayload = {
+    canClaim: boolean?,
+    currentStreak: number?,
+    nextDay: number?,
+    totalDaysClaimed: number?,
+    secondsUntilNextDay: number?,
+}
+
+export type ActiveBoostPayload = {
+    kind: string?,
+    multiplier: number?,
+    remaining: number?,
+    source: string?,
+    expiresAt: number?,
+}
+
+export type LeaderboardPlacementPayload = {
+    coinsRank: number?,
+    depthRank: number?,
+    coinsValue: number?,
+    depthValue: number?,
+}
+
 export type ServerPlayerPayload = {
     coins: number?,
     gems: number?,
@@ -26,6 +52,16 @@ export type ServerPlayerPayload = {
     totalCoinsEarned: number?,
     bossesDefeated: number?,
     maxDepthReached: number?,
+    -- Phase 8: 0..3, см. Constants.TUTORIAL_STEPS.
+    tutorialStep: number?,
+    -- Phase 9: prestige. rebirths — счётчик, rebirthMultiplier —
+    -- денормализованный множитель к value руд (1 + rebirths * 0.1).
+    rebirths: number?,
+    rebirthMultiplier: number?,
+    -- Phase 10: retention-state.
+    dailyState: DailyStatePayload?,
+    activeBoosts: { ActiveBoostPayload }?,
+    leaderboardPlacement: LeaderboardPlacementPayload?,
 }
 
 export type MappedPlayerData = {
@@ -37,6 +73,12 @@ export type MappedPlayerData = {
     totalCoinsEarned: number,
     bossesDefeated: number,
     maxDepthReached: number,
+    tutorialStep: number,
+    rebirths: number,
+    rebirthMultiplier: number,
+    dailyState: DailyStatePayload,
+    activeBoosts: { ActiveBoostPayload },
+    leaderboardPlacement: LeaderboardPlacementPayload,
 }
 
 local PlayerDataMapper = {}
@@ -104,7 +146,26 @@ function PlayerDataMapper.mapUpgrades(payload: ServerPlayerPayload): UpgradeLeve
     return ups
 end
 
+local DEFAULT_DAILY_STATE: DailyStatePayload = {
+    canClaim = false,
+    currentStreak = 0,
+    nextDay = 1,
+    totalDaysClaimed = 0,
+    secondsUntilNextDay = 0,
+}
+
+local DEFAULT_LEADERBOARD: LeaderboardPlacementPayload = {
+    coinsRank = nil,
+    depthRank = nil,
+    coinsValue = 0,
+    depthValue = 0,
+}
+
 function PlayerDataMapper.fromServer(payload: ServerPlayerPayload): MappedPlayerData
+    local rebirths = payload.rebirths or 0
+    local daily = payload.dailyState or DEFAULT_DAILY_STATE
+    local boosts = payload.activeBoosts or {}
+    local placement = payload.leaderboardPlacement or DEFAULT_LEADERBOARD
     return {
         coins = payload.coins or 0,
         gems = 0,
@@ -114,6 +175,26 @@ function PlayerDataMapper.fromServer(payload: ServerPlayerPayload): MappedPlayer
         totalCoinsEarned = payload.totalCoinsEarned or 0,
         bossesDefeated = payload.bossesDefeated or 0,
         maxDepthReached = payload.maxDepthReached or 0,
+        tutorialStep = payload.tutorialStep or 0,
+        rebirths = rebirths,
+        -- Если сервер не прислал — считаем от rebirths (1 + r*0.1). Это
+        -- последний рубеж: предыдущая Phase 8-совместимость + быстрый
+        -- фолбэк, если PlayerStats прилетит ДО Phase-9-апа.
+        rebirthMultiplier = payload.rebirthMultiplier or (1 + rebirths * 0.1),
+        dailyState = {
+            canClaim = daily.canClaim or false,
+            currentStreak = daily.currentStreak or 0,
+            nextDay = daily.nextDay or 1,
+            totalDaysClaimed = daily.totalDaysClaimed or 0,
+            secondsUntilNextDay = daily.secondsUntilNextDay or 0,
+        },
+        activeBoosts = boosts,
+        leaderboardPlacement = {
+            coinsRank = placement.coinsRank,
+            depthRank = placement.depthRank,
+            coinsValue = placement.coinsValue or 0,
+            depthValue = placement.depthValue or 0,
+        },
     }
 end
 

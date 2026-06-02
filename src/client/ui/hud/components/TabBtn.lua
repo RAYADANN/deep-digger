@@ -27,6 +27,10 @@ function TabBtn.create(s: ScopeFactory.HudScope, props: Props)
     end)
 
     return s:New("TextButton")({
+        -- Phase 8: Name="Tab_<id>" — TutorialArrow находит кнопку по этому
+        -- имени, чтобы навести стрелку («Открой инвентарь» / «Открой
+        -- апгрейды»). Не ломает существующий UI, имя не отображается.
+        Name = "Tab_" .. props.tabId,
         Size = UDim2.new(0, 58, 0, 64),
         BackgroundColor3 = s:Computed(function(use)
             return use(isActive) and C.tabActive or C.tabInactive

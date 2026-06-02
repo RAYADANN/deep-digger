@@ -6,6 +6,10 @@ local shared = ReplicatedStorage:WaitForChild("shared")
 
 local OreTypes = require(shared.types.OreTypes)
 local UpgradeLogic = require(shared.util.UpgradeLogic)
+local RebirthLogic = require(shared.util.RebirthLogic)
+-- Phase 10: boost multiplier из активных daily-бустов.
+-- script.Parent (economy) -> script.Parent.Parent (core) -> PlayerBoosts.
+local PlayerBoosts = require(script.Parent.Parent.PlayerBoosts)
 
 export type OreDatabaseLike = {
     getOre: (self: any, oreId: string) -> OreTypes.OreDef?,
@@ -65,7 +69,23 @@ function SellInventory.execute(oreDb: OreDatabaseLike, playerData: OreTypes.Play
     end
 
     local multiplier = UpgradeLogic.multiSellMultiplier(playerData.multiSellLevel or 1)
-    local payout = math.floor(gross * multiplier)
+    -- Phase 9: prestige-множитель к цене продажи. Источник истины —
+    -- RebirthLogic.valueMultiplier; playerData.rebirthMultiplier — только
+    -- денормализованный кэш для скорости. Здесь читаем именно поле, чтобы
+    -- не зависеть от состояния кэша между двумя продажами (RebirthManager
+    -- пересчитывает кэш сразу после ребёрта и при загрузке профиля).
+    local rebirthMult = playerData.rebirthMultiplier
+        or RebirthLogic.valueMultiplier(playerData.rebirths or 0)
+    -- Phase 10: boost-множитель из активных daily-бустов. Чистим истёкшие
+    -- здесь же, чтобы значение не получалось «фантомным» (boost истёк, а
+    -- payout всё ещё с x2). cleanup мутирует список — после продажи
+    -- syncPlayerHud отрисует свежий activeBoosts на BoostChip.
+    PlayerBoosts.cleanup(playerData.activeBoosts)
+    local boostMult = PlayerBoosts.totalMultiplier(playerData.activeBoosts, "coins")
+    -- Порядок: gross * multiSell * rebirth * boost. Rebirth — permanent,
+    -- boost — temporary. Если применять boost ДО rebirth, при разных
+    -- rebirth-уровнях boost даст разный эффект, что не интуитивно.
+    local payout = math.floor(gross * multiplier * rebirthMult * boostMult)
 
     playerData.inventory = keptInventory
     playerData.coins = (playerData.coins or 0) + payout
