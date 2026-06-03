@@ -16,15 +16,15 @@ export type OreDef = {
     icon: string,      -- emoji сейчас, rbxassetid://... после визуального паса
     dropsOil: boolean?,
     isGeode: boolean?,
-    -- Задел под Фазу 13 (визуальная идентичность): материалы, texture atlas,
-    -- hero meshes. Сейчас не заполняются — рендер использует defaults
-    -- (SmoothPlastic + ore.color). Добавление поля в записи OreDatabase
-    -- автоматически активирует визуал без рефакторинга MiningRenderer.
-    material: Enum.Material?,    -- встроенный материал (Slate, Foil, Glass, Neon...)
+    -- Визуальная идентичность (Фаза 14): material/reflectance/glow заполнены
+    -- по слоям в OreDatabase, рендер читает их с приоритетом над
+    -- ORE_VISUAL_BY_RARITY. atlasIndex/meshId — задел под texture atlas и
+    -- hero-меши (post-MVP), пока не заполняются.
+    material: Enum.Material?,    -- встроенный материал (Slate, Foil, Glass, Metal...)
     reflectance: number?,        -- блеск 0..1 (Gold, Diamond)
     atlasIndex: number?,         -- индекс ячейки в общем texture atlas
     meshId: string?,             -- rbxassetid://... для hero-ассетов (сундуки)
-    glow: boolean?,              -- использовать Material.Neon для мистических руд
+    glow: boolean?,              -- шиммер-материал (Foil) для мистических руд; Neon с блоков убран (нагрузка/bloom)
 }
 
 export type OreInstance = {

@@ -15,6 +15,20 @@ Constants.LAYERS = {
     { id = "void" :: LayerId, name = "Void Layer", depthStart = 1200, depthEnd = math.huge, bgColor = Color3.fromRGB(0, 0, 0), blockColor = Color3.fromRGB(13, 0, 26) },
 }
 
+-- Phase 14 (визуальная идентичность): профиль освещения на слой — ощущение
+-- «спуска вглубь». Данные (не формулы), читаются client/core/LayerEnvironment,
+-- который твинит Lighting.Brightness / ClockTime / FogEnd + Atmosphere.Density.
+-- dirt = яркая поверхность (полдень), void = почти полная тьма (полночь).
+Constants.LAYER_LIGHTING = {
+    dirt      = { brightness = 2.2,  clockTime = 14.0, fogEnd = 900, atmosphereDensity = 0.30, atmosphereHaze = 1.0 },
+    stone     = { brightness = 1.7,  clockTime = 10.0, fogEnd = 700, atmosphereDensity = 0.35, atmosphereHaze = 1.4 },
+    limestone = { brightness = 1.4,  clockTime = 8.0,  fogEnd = 600, atmosphereDensity = 0.40, atmosphereHaze = 1.8 },
+    crimson   = { brightness = 1.0,  clockTime = 5.5,  fogEnd = 480, atmosphereDensity = 0.50, atmosphereHaze = 2.2 },
+    marble    = { brightness = 1.5,  clockTime = 7.0,  fogEnd = 650, atmosphereDensity = 0.32, atmosphereHaze = 1.5 },
+    obsidian  = { brightness = 0.65, clockTime = 2.0,  fogEnd = 380, atmosphereDensity = 0.55, atmosphereHaze = 2.6 },
+    void      = { brightness = 0.35, clockTime = 0.0,  fogEnd = 300, atmosphereDensity = 0.60, atmosphereHaze = 3.0 },
+}
+
 Constants.BLOCK_SIZE_STUDS = 4.5
 Constants.SURFACE_W = 15
 Constants.SURFACE_D = 15
