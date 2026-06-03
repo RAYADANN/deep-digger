@@ -28,6 +28,12 @@ export type Deps = {
     --   /leaderboard refresh — force refresh кэша.
     dailyReward: any?,
     leaderboard: any?,
+    -- Phase 11: опционально — PetManager.
+    --   /egg [N]   — бесплатно вылупить N петов (без списания монет).
+    --   /hatch     — алиас /egg 1.
+    --   /pet <id>  — выдать конкретного пета по petId (см. PetDatabase).
+    --   /clearpets — удалить всех петов + снять экипировку.
+    petManager: any?,
 }
 
 local DevCommands = {}
@@ -58,6 +64,7 @@ function DevCommands.new(deps: Deps)
     self._rebirthManager = deps.rebirthManager
     self._dailyReward = deps.dailyReward
     self._leaderboard = deps.leaderboard
+    self._petManager = deps.petManager
 
     if not isStudio() then
         self._log:info("DevCommands disabled (not Studio)")
@@ -259,6 +266,49 @@ function DevCommands:_handleLeaderboardCmd(player: Player, args: { string })
     end
 end
 
+--[[
+    Phase 11 dev-команды (питомцы).
+]]
+function DevCommands:_handleEgg(player: Player, args: { string })
+    if not self._petManager then
+        self:_notifyPlayer(player, "PetManager не подключён")
+        return
+    end
+    local n = tonumber(args[1]) or 1
+    n = math.max(1, math.floor(n))
+    local hatched = self._petManager:devHatch(player, n)
+    local count = if hatched then #hatched else 0
+    self:_notifyPlayer(player, ("Вылупилось питомцев: %d"):format(count))
+    self._log:info("DevEgg:", player.UserId, "+" .. count)
+end
+
+function DevCommands:_handlePet(player: Player, args: { string })
+    if not self._petManager then
+        self:_notifyPlayer(player, "PetManager не подключён")
+        return
+    end
+    local petId = args[1]
+    if not petId or petId == "" then
+        self:_notifyPlayer(player, "Использование: /pet <id>")
+        return
+    end
+    local rec = self._petManager:devGivePet(player, petId)
+    if not rec then
+        self:_notifyPlayer(player, "Неизвестный питомец: " .. petId)
+        return
+    end
+    self:_notifyPlayer(player, "Выдан питомец: " .. (rec.name or petId))
+end
+
+function DevCommands:_handleClearPets(player: Player)
+    if not self._petManager then
+        self:_notifyPlayer(player, "PetManager не подключён")
+        return
+    end
+    self._petManager:devClearPets(player)
+    self:_notifyPlayer(player, "Питомцы очищены")
+end
+
 function DevCommands:_handleSkipTutorial(player: Player)
     -- Принудительно завершает туториал на сервере (tutorialStep = 3).
     -- Удобно для тестов, когда нужно проверить не-онбординг-фичу, но
@@ -275,7 +325,7 @@ end
 
 function DevCommands:_handleHelp(player: Player)
     self:_notifyPlayer(player,
-        "/coins [N], /reset, /maxlvl <id>, /skiptut, /rebirth [N], /daily, /setday +N, /resetdaily, /boost <мин>, /leaderboard refresh"
+        "/coins [N], /reset, /maxlvl <id>, /skiptut, /rebirth [N], /daily, /setday +N, /resetdaily, /boost <мин>, /leaderboard refresh, /egg [N], /hatch, /pet <id>, /clearpets"
     )
 end
 
@@ -308,6 +358,14 @@ function DevCommands:_bind(player: Player)
             self:_handleBoost(player, args)
         elseif cmd == "/leaderboard" then
             self:_handleLeaderboardCmd(player, args)
+        elseif cmd == "/egg" then
+            self:_handleEgg(player, args)
+        elseif cmd == "/hatch" then
+            self:_handleEgg(player, { "1" })
+        elseif cmd == "/pet" then
+            self:_handlePet(player, args)
+        elseif cmd == "/clearpets" then
+            self:_handleClearPets(player)
         elseif cmd == "/devhelp" then
             self:_handleHelp(player)
         end

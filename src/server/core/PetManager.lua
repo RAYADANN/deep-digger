@@ -1,0 +1,323 @@
+--!strict
+-- PetManager.lua — Phase 11 (Pets MVP).
+--
+-- Серверная часть пет-системы. Структура совпадает с RebirthManager (Phase 9)
+-- и DailyReward (Phase 10): DI через Deps, Net:Handle в new(), onProfileLoaded
+-- идемпотентен.
+--
+-- Хендлеры:
+--   Net:Handle("HatchEgg", count)  — купить + вылупить count яиц (батч «10x»).
+--                                    Серверная валидация монет, weighted roll
+--                                    через EggManager/PetLogic, запись в
+--                                    playerData.pets, авто-equip первого пета
+--                                    если слот пуст. Возвращает hatched-список
+--                                    для клиентского PetHatchFX.
+--   Net:Handle("EquipPet", uid)    — экипировать пета (1 slot MVP: заменяет).
+--   Net:Handle("UnequipPet")       — снять экипировку.
+--
+-- onProfileLoaded(player) — гарантирует наличие полей (pets / equippedPet /
+--   petUidCounter) и чистит «висячий» equippedPet (uid, которого нет в pets).
+--
+-- DevHooks: devHatch / devGivePet / devClearPets для DevCommands.
+--
+-- Эффекты петов (damage / luck / coins / multiMine) этот модуль НЕ применяет —
+-- они считаются в MiningEngine / SellInventory через PetLogic. PetManager
+-- отвечает только за владение и экипировку.
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local shared = ReplicatedStorage:WaitForChild("shared")
+local modules = ReplicatedStorage:WaitForChild("Packages")
+
+local Logger = require(shared.util.Logger)
+local Net = require(modules.Net)
+local PetLogic = require(shared.util.PetLogic)
+local PetDatabase = require(shared.data.PetDatabase)
+local EggManager = require(script.Parent.EggManager)
+
+export type Deps = {
+    profileManager: any,
+    onProfileChanged: ((player: Player) -> ())?,
+    notify: ((player: Player, payload: any) -> ())?,
+}
+
+local PetManager = {}
+PetManager.__index = PetManager
+
+-- MVP: единственный тип яйца.
+local DEFAULT_EGG_ID = "basic"
+
+function PetManager.new(deps: Deps)
+    local self = setmetatable({}, PetManager)
+    self._log = Logger.new("PetManager")
+    self._profileManager = deps.profileManager
+    self._onProfileChanged = deps.onProfileChanged
+    self._notify = deps.notify
+
+    Net:Handle("HatchEgg", function(player: Player, count: number?)
+        return self:_handleHatch(player, count)
+    end)
+    Net:Handle("EquipPet", function(player: Player, uid: string?)
+        return self:_handleEquip(player, uid)
+    end)
+    Net:Handle("UnequipPet", function(player: Player, uid: string?)
+        return self:_handleUnequip(player, uid)
+    end)
+
+    self._log:info("PetManager initialized")
+    return self
+end
+
+function PetManager:_data(player: Player)
+    return self._profileManager:getData(player)
+end
+
+function PetManager:_sync(player: Player)
+    if self._onProfileChanged then
+        self._onProfileChanged(player)
+    end
+end
+
+local function ensurePetFields(data: any)
+    if typeof(data.pets) ~= "table" then
+        data.pets = {}
+    end
+    if typeof(data.petUidCounter) ~= "number" then
+        data.petUidCounter = 0
+    end
+    -- equippedPet может быть nil (ничего не экипировано) — это валидно.
+    if data.equippedPet ~= nil and typeof(data.equippedPet) ~= "string" and typeof(data.equippedPet) ~= "table" then
+        data.equippedPet = nil
+    end
+end
+
+-- Найти запись пета по uid в data.pets.
+local function findRecord(data: any, uid: string): any?
+    for _, rec in ipairs(data.pets) do
+        if typeof(rec) == "table" and rec.uid == uid then
+            return rec
+        end
+    end
+    return nil
+end
+
+-- Сгенерировать новый uid через монотонный счётчик.
+local function nextUid(data: any): string
+    data.petUidCounter = (data.petUidCounter or 0) + 1
+    return "p" .. tostring(data.petUidCounter)
+end
+
+-- Добавить пета по petId, вернуть запись { uid, petId } (или nil если petId
+-- неизвестен).
+local function addPet(data: any, petId: string): any?
+    if not PetDatabase.get(petId) then
+        return nil
+    end
+    local rec = { uid = nextUid(data), petId = petId }
+    table.insert(data.pets, rec)
+    return rec
+end
+
+-- Сериализация записи пета для клиента (FX + панель): добавляем def-поля.
+local function toPayload(rec: any): any?
+    if not rec then
+        return nil
+    end
+    local def = PetDatabase.get(rec.petId)
+    if not def then
+        return nil
+    end
+    return {
+        uid = rec.uid,
+        petId = rec.petId,
+        name = def.name,
+        rarity = def.rarity,
+        icon = def.icon,
+        effect = { kind = def.effect.kind, value = def.effect.value },
+    }
+end
+
+--[[
+    HatchEgg: купить и вылупить count яиц. Возвращает hatched-список для
+    клиентского PetHatchFX. Авто-equip первого пета если слот пуст.
+]]
+function PetManager:_handleHatch(player: Player, count: number?)
+    local data = self:_data(player)
+    if not data then
+        return { success = false, error = "no_profile", message = "Профиль не загружен" }
+    end
+    ensurePetFields(data)
+
+    local n = EggManager.clampCount(count)
+    local cost = EggManager.totalCost(DEFAULT_EGG_ID, n)
+    local egg = EggManager.getEgg(DEFAULT_EGG_ID)
+    if not egg then
+        return { success = false, error = "no_egg", message = "Яйцо не настроено" }
+    end
+
+    local coins = data.coins or 0
+    if coins < cost then
+        return {
+            success = false,
+            error = "not_enough_coins",
+            message = ("Не хватает %d монет"):format(cost - coins),
+            requiredCoins = cost,
+        }
+    end
+
+    -- Списываем монеты, катим хэтчи.
+    data.coins = coins - cost
+    local petIds = EggManager.hatch(DEFAULT_EGG_ID, n)
+
+    local hatched = {}
+    for _, petId in ipairs(petIds) do
+        local rec = addPet(data, petId)
+        if rec then
+            table.insert(hatched, toPayload(rec))
+        end
+    end
+
+    -- Авто-equip: если ничего не экипировано и что-то вылупилось — надеваем
+    -- первого. Это «жанровый» UX: первый пет сразу даёт буст без лишнего
+    -- клика. Игрок может сменить вручную.
+    if #PetLogic.getEquippedUids(data) == 0 and #hatched > 0 then
+        data.equippedPet = hatched[1].uid
+    end
+
+    self:_sync(player)
+
+    self._log:info(
+        "Hatch by", player.UserId,
+        "- count:", n,
+        "- cost:", cost,
+        "- pets:", #hatched
+    )
+
+    return {
+        success = true,
+        hatched = hatched,
+        coinsSpent = cost,
+        count = n,
+    }
+end
+
+--[[
+    EquipPet: 1 slot MVP — экипировка заменяет текущего пета.
+]]
+function PetManager:_handleEquip(player: Player, uid: string?)
+    local data = self:_data(player)
+    if not data then
+        return { success = false, error = "no_profile" }
+    end
+    ensurePetFields(data)
+    if typeof(uid) ~= "string" or uid == "" then
+        return { success = false, error = "bad_uid", message = "Неверный питомец" }
+    end
+    if not findRecord(data, uid) then
+        return { success = false, error = "not_owned", message = "Питомец не найден" }
+    end
+    -- MVP: один слот. equippedPet — строка. (multi-slot из Фазы 12 заменит
+    -- эту строку на список и будет проверять maxEquipped.)
+    data.equippedPet = uid
+    self:_sync(player)
+    return { success = true, equippedPet = uid }
+end
+
+--[[
+    UnequipPet: снять экипировку. uid опционален (MVP — один слот, просто
+    очищаем). Если передан uid и он не совпадает с экипированным — no-op
+    success (idempotent).
+]]
+function PetManager:_handleUnequip(player: Player, uid: string?)
+    local data = self:_data(player)
+    if not data then
+        return { success = false, error = "no_profile" }
+    end
+    ensurePetFields(data)
+    data.equippedPet = nil
+    self:_sync(player)
+    return { success = true }
+end
+
+--[[
+    Вызывается из init.server.lua после ProfileManager:loadProfile.
+    Идемпотентен: чинит поля и «висячий» equippedPet (uid удалённого пета).
+]]
+function PetManager:onProfileLoaded(player: Player)
+    local data = self:_data(player)
+    if not data then
+        return
+    end
+    ensurePetFields(data)
+    -- Чистим equippedPet, если указывает на несуществующего пета.
+    local equipped = PetLogic.getEquippedUids(data)
+    local valid: { string } = {}
+    for _, uid in ipairs(equipped) do
+        if findRecord(data, uid) then
+            table.insert(valid, uid)
+        end
+    end
+    if #valid == 0 then
+        data.equippedPet = nil
+    else
+        data.equippedPet = valid[1]
+    end
+end
+
+----------------------------------------------------------------------
+-- DevHooks (DevCommands, только Studio)
+----------------------------------------------------------------------
+
+-- /egg [N] и /hatch: бесплатно вылупить count петов (без списания монет).
+function PetManager:devHatch(player: Player, count: number?)
+    local data = self:_data(player)
+    if not data then
+        return nil
+    end
+    ensurePetFields(data)
+    local n = EggManager.clampCount(count)
+    local petIds = EggManager.hatch(DEFAULT_EGG_ID, n)
+    local hatched = {}
+    for _, petId in ipairs(petIds) do
+        local rec = addPet(data, petId)
+        if rec then
+            table.insert(hatched, toPayload(rec))
+        end
+    end
+    if #PetLogic.getEquippedUids(data) == 0 and #hatched > 0 then
+        data.equippedPet = hatched[1].uid
+    end
+    self:_sync(player)
+    return hatched
+end
+
+-- /pet <id>: выдать конкретного пета по petId.
+function PetManager:devGivePet(player: Player, petId: string)
+    local data = self:_data(player)
+    if not data then
+        return nil
+    end
+    ensurePetFields(data)
+    local rec = addPet(data, petId)
+    if not rec then
+        return nil
+    end
+    if #PetLogic.getEquippedUids(data) == 0 then
+        data.equippedPet = rec.uid
+    end
+    self:_sync(player)
+    return toPayload(rec)
+end
+
+-- /clearpets: удалить всех петов и снять экипировку.
+function PetManager:devClearPets(player: Player)
+    local data = self:_data(player)
+    if not data then
+        return
+    end
+    data.pets = {}
+    data.equippedPet = nil
+    data.petUidCounter = 0
+    self:_sync(player)
+end
+
+return PetManager

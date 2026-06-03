@@ -34,6 +34,20 @@ export type LeaderboardPlacementPayload = {
     depthValue: number?,
 }
 
+-- Phase 11: pet payload-секции.
+export type PetRecordPayload = {
+    uid: string,
+    petId: string,
+}
+
+export type PetEffectsPayload = {
+    damage: number?,
+    luck: number?,
+    coin: number?,
+    multiMine: number?,
+    equippedCount: number?,
+}
+
 export type ServerPlayerPayload = {
     coins: number?,
     gems: number?,
@@ -62,6 +76,10 @@ export type ServerPlayerPayload = {
     dailyState: DailyStatePayload?,
     activeBoosts: { ActiveBoostPayload }?,
     leaderboardPlacement: LeaderboardPlacementPayload?,
+    -- Phase 11: pets.
+    pets: { PetRecordPayload }?,
+    equippedPet: string?,
+    petEffects: PetEffectsPayload?,
 }
 
 export type MappedPlayerData = {
@@ -79,6 +97,9 @@ export type MappedPlayerData = {
     dailyState: DailyStatePayload,
     activeBoosts: { ActiveBoostPayload },
     leaderboardPlacement: LeaderboardPlacementPayload,
+    pets: { PetRecordPayload },
+    equippedPet: string?,
+    petEffects: PetEffectsPayload,
 }
 
 local PlayerDataMapper = {}
@@ -161,6 +182,29 @@ local DEFAULT_LEADERBOARD: LeaderboardPlacementPayload = {
     depthValue = 0,
 }
 
+local DEFAULT_PET_EFFECTS: PetEffectsPayload = {
+    damage = 1,
+    luck = 1,
+    coin = 0,
+    multiMine = 0,
+    equippedCount = 0,
+}
+
+-- Нормализует список pet-записей. Сервер шлёт { uid, petId } (без def'ов —
+-- их PetsPanel резолвит через PetDatabase). Битые записи отбрасываем.
+local function normalizePets(pets: any): { PetRecordPayload }
+    local result: { PetRecordPayload } = {}
+    if typeof(pets) ~= "table" then
+        return result
+    end
+    for _, rec in ipairs(pets) do
+        if typeof(rec) == "table" and typeof(rec.uid) == "string" and typeof(rec.petId) == "string" then
+            table.insert(result, { uid = rec.uid, petId = rec.petId })
+        end
+    end
+    return result
+end
+
 function PlayerDataMapper.fromServer(payload: ServerPlayerPayload): MappedPlayerData
     local rebirths = payload.rebirths or 0
     local daily = payload.dailyState or DEFAULT_DAILY_STATE
@@ -195,6 +239,9 @@ function PlayerDataMapper.fromServer(payload: ServerPlayerPayload): MappedPlayer
             coinsValue = placement.coinsValue or 0,
             depthValue = placement.depthValue or 0,
         },
+        pets = normalizePets(payload.pets),
+        equippedPet = payload.equippedPet,
+        petEffects = payload.petEffects or DEFAULT_PET_EFFECTS,
     }
 end
 

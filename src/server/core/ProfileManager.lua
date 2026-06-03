@@ -101,6 +101,17 @@ local DEFAULT_DATA = {
         coinsValue = 0,
         depthValue = 0,
     },
+    -- Phase 11 (Pets MVP).
+    --   pets: список { uid, petId }. Пустой у новичка.
+    --   equippedPet: uid экипированного пета (nil = ничего не экипировано).
+    --     ProfileService не хранит nil в таблице, поэтому поле может
+    --     отсутствовать в старых сейвах — PetManager:onProfileLoaded
+    --     гарантирует его наличие. Template-мердж добавит pets={} и
+    --     petUidCounter=0 старым профилям без отдельной миграции.
+    --   petUidCounter: монотонный счётчик для uid'ов новых петов.
+    pets = {},
+    equippedPet = nil,
+    petUidCounter = 0,
 }
 
 -- Создать ProfileStore

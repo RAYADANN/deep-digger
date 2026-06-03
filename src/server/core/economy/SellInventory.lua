@@ -7,6 +7,8 @@ local shared = ReplicatedStorage:WaitForChild("shared")
 local OreTypes = require(shared.types.OreTypes)
 local UpgradeLogic = require(shared.util.UpgradeLogic)
 local RebirthLogic = require(shared.util.RebirthLogic)
+-- Phase 11: coinBoost экипированных петов (аддитивно в boost-стадию).
+local PetLogic = require(shared.util.PetLogic)
 -- Phase 10: boost multiplier из активных daily-бустов.
 -- script.Parent (economy) -> script.Parent.Parent (core) -> PlayerBoosts.
 local PlayerBoosts = require(script.Parent.Parent.PlayerBoosts)
@@ -81,7 +83,12 @@ function SellInventory.execute(oreDb: OreDatabaseLike, playerData: OreTypes.Play
     -- payout всё ещё с x2). cleanup мутирует список — после продажи
     -- syncPlayerHud отрисует свежий activeBoosts на BoostChip.
     PlayerBoosts.cleanup(playerData.activeBoosts)
+    -- Phase 11: coinBoost петов складывается с daily-boost'ами аддитивно в
+    -- ту же стадию (1 + Σ(daily) + Σ(pet coinBoost)) — порядок multiSell →
+    -- rebirth → boost из Фазы 10 не меняем. Пет с +25% и daily x2 дают
+    -- boostMult = 1 + 1.0 + 0.25 = 2.25 (Pet Sim style additive stack).
     local boostMult = PlayerBoosts.totalMultiplier(playerData.activeBoosts, "coins")
+        + PetLogic.coinBoostSum(playerData)
     -- Порядок: gross * multiSell * rebirth * boost. Rebirth — permanent,
     -- boost — temporary. Если применять boost ДО rebirth, при разных
     -- rebirth-уровнях boost даст разный эффект, что не интуитивно.

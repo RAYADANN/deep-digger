@@ -18,6 +18,8 @@ local Tutorial = require(script.ui.Tutorial)
 local RebirthFX = require(script.ui.RebirthFX)
 local DailyRewardModal = require(script.ui.DailyRewardModal)
 local RewardFX = require(script.ui.RewardFX)
+local PetVisual = require(script.ui.PetVisual)
+local PetLogic = require(shared.util.PetLogic)
 local ScopeFactory = require(script.ui.hud.ScopeFactory)
 local Net = require(modules.Net)
 
@@ -60,6 +62,15 @@ local function applyPlayerPayload(data)
     if hud then
         hud:setPlayerData(playerDataBuffer)
     end
+    -- Phase 11: парящий питомец отражает экипировку из payload'а.
+    -- equippedPet — это UID, а PetVisual ждёт petId; резолвим через PetLogic
+    -- (uid → запись в pets → petId). nil/нет пета → скрыть. pcall — падение
+    -- визуала не должно сорвать синк HUD.
+    pcall(function()
+        local equippedPets = PetLogic.getEquippedPets(playerDataBuffer)
+        local def = equippedPets[1]
+        PetVisual.setEquipped(def and def.id or nil)
+    end)
 end
 
 -- Phase 10: persistent scope для модального оверлея DailyRewardModal.
@@ -184,6 +195,7 @@ player.AncestryChanged:Connect(function()
         depthTracker:stop()
         if hud then hud:destroy(); hud = nil end
         Tutorial.destroy()
+        PetVisual.destroy()
     end
 end)
 

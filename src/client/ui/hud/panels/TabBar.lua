@@ -12,10 +12,10 @@ local Children = Fusion.Children
 local TabBar = {}
 
 function TabBar.create(s: ScopeFactory.HudScope, state: HudStateModule.HudState)
-    -- Phase 10: ширину контейнера расширили под 5-й таб (LEADERBOARD).
-    -- 5 * 58 + 4 * 6 = 314 → 320 с запасом.
+    -- Phase 11: ширину контейнера расширили под 6-й таб (PETS).
+    -- 6 * 58 + 5 * 6 = 378 → 384 с запасом.
     return s:New("Frame")({
-        Size = UDim2.new(0, 320, 0, 72),
+        Size = UDim2.new(0, 384, 0, 72),
         Position = UDim2.new(0, 8, 1, -80),
         BackgroundTransparency = 1,
         [Children] = {
@@ -62,6 +62,15 @@ function TabBar.create(s: ScopeFactory.HudScope, state: HudStateModule.HudState)
                 icon = "🏆",
                 label = "ЛИДЕРЫ",
                 tabId = "leaderboard",
+                activeTab = state.activeTab,
+                panelOpen = state.panelOpen,
+            }),
+            -- Phase 11: pets. 6-й таб — жанро-определяющая механика.
+            -- Tab_pets используется PetsPanel.create как activeTab filter.
+            TabBtn.create(s, {
+                icon = "🐾",
+                label = "ПИТОМЦЫ",
+                tabId = "pets",
                 activeTab = state.activeTab,
                 panelOpen = state.panelOpen,
             }),

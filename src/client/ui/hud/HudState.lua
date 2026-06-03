@@ -59,6 +59,13 @@ export type HudState = {
     dailyTotalClaimed: any,
     activeBoosts: any,
     leaderboardPlacement: any,
+    -- Phase 11: pets.
+    --   pets        — список { uid, petId } (PetsPanel резолвит def'ы).
+    --   equippedPet — uid экипированного пета (nil = ничего).
+    --   petEffects  — сводка бустов { damage, luck, coin, multiMine, equippedCount }.
+    pets: any,
+    equippedPet: any,
+    petEffects: any,
 }
 
 local HudState = {}
@@ -96,6 +103,11 @@ function HudState.create(scope: ScopeFactory.HudScope): HudState
             coinsValue = 0,
             depthValue = 0,
         } :: PlayerDataMapper.LeaderboardPlacementPayload),
+        pets = scope:Value({} :: { PlayerDataMapper.PetRecordPayload }),
+        equippedPet = scope:Value(nil :: string?),
+        petEffects = scope:Value({
+            damage = 1, luck = 1, coin = 0, multiMine = 0, equippedCount = 0,
+        } :: PlayerDataMapper.PetEffectsPayload),
     }
 end
 
@@ -141,6 +153,10 @@ function HudState.applyServerPayload(state: HudState, payload: PlayerDataMapper.
     state.dailyTotalClaimed:set(mapped.dailyState.totalDaysClaimed or 0)
     state.activeBoosts:set(mapped.activeBoosts)
     state.leaderboardPlacement:set(mapped.leaderboardPlacement)
+    -- Phase 11: pets. Мгновенно (без tween) — hatch/equip дискретны.
+    state.pets:set(mapped.pets)
+    state.equippedPet:set(mapped.equippedPet)
+    state.petEffects:set(mapped.petEffects)
 end
 
 function HudState.applyDepth(state: HudState, depth: number, layerId: string, layerName: string)

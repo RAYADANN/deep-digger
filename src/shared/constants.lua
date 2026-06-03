@@ -155,4 +155,49 @@ Constants.LEADERBOARD = {
     writeThresholdDepth = 5,
 }
 
+-- Phase 11 (Pets MVP): жанро-определяющая механика.
+--
+-- PETS:
+--   maxEquipped       — сколько петов можно держать экипированными
+--                        одновременно. 1 на старте MVP; gamepass из Фазы 12
+--                        («+2 pet slots») поднимет до 3 — поэтому читаем это
+--                        число везде через PetLogic, а не хардкодим 1.
+--   hatchBatchMax     — макс. яиц за один Net:Handle("HatchEgg", count)
+--                        («open 10x»). Античит на сервере клампит count.
+--   multiMineMaxChance — потолок суммарного шанса multiMine, чтобы стек из
+--                        нескольких multiMine-петов (после gamepass slots)
+--                        не давал гарантированный второй блок каждый удар.
+--   luckMaxMultiplier  — потолок множителя шанса скрытых комнат (luckBoost),
+--                        чтобы не сломать экономику комнат на стеках.
+--   eggs              — определения яиц. На MVP один тип «basic».
+--                        cost — цена в монетах за ОДНО яйцо.
+-- Формулы (weighted roll, аккумуляция эффектов) — в shared/util/PetLogic.lua.
+-- Сами питомцы и их эффекты — в shared/data/PetDatabase.lua.
+Constants.PETS = {
+    maxEquipped = 1,
+    hatchBatchMax = 10,
+    multiMineMaxChance = 0.9,
+    luckMaxMultiplier = 3.0,
+    eggs = {
+        basic = {
+            id = "basic",
+            name = "Basic Egg",
+            icon = "🥚",
+            cost = 1000,
+        },
+    },
+    -- Веса rarity для weighted random hatch из Basic Egg. Сумма не обязана
+    -- быть 1 — PetLogic нормализует. Common доминирует, mythic — джекпот.
+    -- Внутри выпавшей rarity пет выбирается равновероятно из пула этой
+    -- редкости в PetDatabase.
+    basicEggWeights = {
+        common = 0.55,
+        uncommon = 0.27,
+        rare = 0.13,
+        epic = 0.04,
+        legendary = 0.009,
+        mythic = 0.001,
+    },
+}
+
 return Constants

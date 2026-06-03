@@ -71,6 +71,15 @@ export type LeaderboardPlacement = {
     depthValue: number,
 }
 
+-- Phase 11 (Pets MVP): запись о владении питомцем.
+--   uid   — уникальный идентификатор экземпляра (несколько одинаковых петов
+--           различимы), генерируется сервером через petUidCounter.
+--   petId — ссылка на PetDatabase.Pet.id (определение, эффект, визуал).
+export type PetRecord = {
+    uid: string,
+    petId: string,
+}
+
 export type PlayerData = {
     depth: number,
     layer: string,
@@ -109,6 +118,15 @@ export type PlayerData = {
     dailyState: DailyState,
     activeBoosts: { ActiveBoost },
     leaderboardPlacement: LeaderboardPlacement,
+    -- Phase 11 (Pets MVP):
+    --   pets          — инвентарь питомцев (записи { uid, petId }).
+    --   equippedPet   — uid экипированного пета (1 slot на старте; string?).
+    --                   PetLogic.getEquippedUids поддерживает и список (для
+    --                   будущего gamepass «+2 pet slots» из Фазы 12).
+    --   petUidCounter — монотонный счётчик для генерации uid'ов (server-only).
+    pets: { PetRecord },
+    equippedPet: string?,
+    petUidCounter: number,
 }
 
 export type UpgradeDef = {

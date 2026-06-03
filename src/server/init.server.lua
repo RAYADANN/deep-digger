@@ -22,6 +22,8 @@ local TutorialManager = require(script.core.TutorialManager)
 local RebirthManager = require(script.core.RebirthManager)
 local DailyReward = require(script.core.DailyReward)
 local PlayerBoosts = require(script.core.PlayerBoosts)
+local PetManager = require(script.core.PetManager)
+local PetLogic = require(shared.util.PetLogic)
 
 local log = Logger.new("Server:Init")
 
@@ -216,6 +218,13 @@ local function buildHudPayload(playerData)
             coinsRank = nil, depthRank = nil,
             coinsValue = 0, depthValue = 0,
         },
+        -- Phase 11: pets. pets — список { uid, petId } (PetsPanel резолвит
+        -- def через PetDatabase на клиенте); equippedPet — uid; petEffects —
+        -- сводка бустов (PetLogic.summary) для индикатора в панели и
+        -- мгновенного отображения без пересчёта на клиенте.
+        pets = playerData.pets or {},
+        equippedPet = playerData.equippedPet,
+        petEffects = PetLogic.summary(playerData),
     }
 end
 
@@ -321,6 +330,14 @@ local dailyReward = DailyReward.new({
     notify = notify,
 })
 
+-- Phase 11: pet-система. onProfileChanged = onEconomyChanged, потому что
+-- hatch списывает монеты (нужен HUD-sync + потенциально leaderboard write).
+local petManager = PetManager.new({
+    profileManager = profileManager,
+    onProfileChanged = onEconomyChanged,
+    notify = notify,
+})
+
 DevCommands.new({
     profileManager = profileManager,
     onEconomyChanged = syncPlayerHud,
@@ -329,6 +346,7 @@ DevCommands.new({
     rebirthManager = rebirthManager,
     dailyReward = dailyReward,
     leaderboard = leaderboard,
+    petManager = petManager,
 })
 
 --[[
@@ -368,6 +386,19 @@ Net:Handle("MineBlock", function(player: Player, clicks: { { x: number, z: numbe
             result.inventoryFull = loot.rejected > 0
             if loot.added > 0 then
                 playerData.totalBlocksMined += 1
+            end
+            -- Phase 11 (multiMine): дополнительные блоки, сломанные петом.
+            -- Каждый кладём в инвентарь тем же путём (capacity + autoSell).
+            if result.bonusOreDefs then
+                for _, bonusDef in ipairs(result.bonusOreDefs) do
+                    local bonusLoot = MiningLoot.tryAddOre(oreDb, playerData, bonusDef.id, 1, false)
+                    if bonusLoot.added > 0 then
+                        playerData.totalBlocksMined += 1
+                    end
+                    if bonusLoot.autoSold then
+                        result.autoSold = true
+                    end
+                end
             end
             if loot.autoSold then
                 notifyOnce(player, "auto_sell", {
@@ -464,6 +495,10 @@ local function onPlayerAdded(player: Player)
     --   Сам модал откроется клиентом по dailyState.canClaim в первом
     --   PlayerStats-пейлоаде или по kind="daily_available" в Notify.
     dailyReward:onProfileLoaded(player)
+
+    -- 3e. Phase 11: гарантируем поля петов и чиним «висячий» equippedPet
+    --   (uid удалённого пета). Идемпотентно.
+    petManager:onProfileLoaded(player)
 
     -- 4. Полный snapshot блоков для начального состояния клиента
     sendBlocksSnapshot(player)

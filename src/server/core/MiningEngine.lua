@@ -12,6 +12,9 @@ local Logger = require(shared.util.Logger)
 local Constants = require(shared.constants)
 local OreTypes = require(shared.types.OreTypes)
 local UpgradeLogic = require(shared.util.UpgradeLogic)
+-- Phase 11: эффекты петов (damageBoost / luckBoost / multiMine). Формулы —
+-- единый источник в PetLogic, здесь только применение к урону/шансам.
+local PetLogic = require(shared.util.PetLogic)
 
 local MiningEngine = {}
 MiningEngine.__index = MiningEngine
@@ -208,6 +211,9 @@ function MiningEngine:hitBlock(player, playerData, x, z, y, isCrit: boolean?)
 
     local power = UpgradeLogic.pickaxePower(playerData.pickaxeLevel or 1)
     local dmg = if isCrit then power * 3 else power
+    -- Phase 11: damageBoost экипированных петов (1 + Σ damageBoost).
+    -- Применяется ПОСЛЕ крита — пет усиливает и обычный, и крит-удар.
+    dmg *= PetLogic.damageMultiplier(playerData)
 
     local blockLayer = self:_layer(block.depth)
     local weakPickaxe = false
@@ -241,7 +247,9 @@ function MiningEngine:hitBlock(player, playerData, x, z, y, isCrit: boolean?)
 
     local roomRarity = nil
     local roomGenerated = false
-    local roomChance = Constants.SHAFT_BASE_CHANCE + block.depth * Constants.SHAFT_DEPTH_BONUS
+    -- Phase 11: luckBoost петов умножает шанс скрытой комнаты.
+    local roomChance = (Constants.SHAFT_BASE_CHANCE + block.depth * Constants.SHAFT_DEPTH_BONUS)
+        * PetLogic.luckMultiplier(playerData)
     if oreDef and math.random() <= roomChance then
         roomGenerated = true
         local steps = 4 + math.random(0, 6)
@@ -277,11 +285,50 @@ function MiningEngine:hitBlock(player, playerData, x, z, y, isCrit: boolean?)
         end
     end
 
+    -- Phase 11 (multiMine): шанс сломать ещё один соседний блок. Один
+    -- дополнительный блок за удар (chance клампится <= 1 в PetLogic).
+    local bonusOreDefs = nil
+    local multiMineChance = PetLogic.multiMineChance(playerData)
+    if multiMineChance > 0 and math.random() < multiMineChance then
+        local bonusDef = self:_multiMineBreak(uid, x, z, y, snapshot)
+        if bonusDef then
+            bonusOreDefs = { bonusDef }
+        end
+    end
+
     return {
         success = true, mined = true, oreDef = oreDef, damage = dmg, crit = isCrit,
         roomGenerated = roomGenerated, roomRarity = roomRarity, weakPickaxe = weakPickaxe,
+        bonusOreDefs = bonusOreDefs,
         blockDelta = buildDelta(snapshot, blocks),
     }
+end
+
+--[[
+    Phase 11 (multiMine): мгновенно ломает один соседний открытый блок вокруг
+    (x,z,y) и возвращает его OreDef (или nil). Снимок передаётся снаружи, чтобы
+    изменения попали в общую дельту удара. Снос мгновенный (не по HP) — это
+    «бонусный» блок от пета, не повторный удар.
+]]
+function MiningEngine:_multiMineBreak(uid, x, z, y, snapshot)
+    local blocks, air = self._blocks[uid], self._air[uid]
+    for _, d in ipairs(NEIGHBORS) do
+        local nx, nz, ny = x + d[1], z + d[3], y + d[2]
+        if ny >= 0 then
+            local nk = key(nx, nz, ny)
+            local nb = blocks[nk]
+            if nb and self:_isExposed(uid, nx, nz, ny) then
+                local pool = self._db[self:_layer(nb.depth)] or {}
+                local oreDef = nil
+                for _, o in ipairs(pool) do if o.id == nb.oreId then oreDef = o; break end end
+                trackKey(snapshot, blocks, nk)
+                blocks[nk] = nil; air[nk] = true
+                self:_revealNeighbors(uid, nx, nz, ny, snapshot)
+                return oreDef
+            end
+        end
+    end
+    return nil
 end
 
 function MiningEngine:resetPlayer(player)

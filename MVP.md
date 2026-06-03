@@ -5,7 +5,7 @@
 > **Архитектура:** 3D Neighbor Reveal (текущая). К вертикальной сетке 6×N не возвращаемся.
 > **Кто пишет код:** AI-агент в Cursor.
 > **Кто тестирует:** разработчик (Roblox Studio + Rojo).
-> **Статус:** Фазы 0–10 закрыты 🟢 (Фаза 5 ждёт плейтест-профайл), Фаза 11 (Pets MVP) — 🔴 на очереди.
+> **Статус:** Фазы 0–11 закрыты 🟢 (Фаза 5 ждёт плейтест-профайл), Фаза 12 (Монетизация) — 🔴 на очереди.
 > **Обновлено:** 2026-06-03
 
 ---
@@ -287,19 +287,23 @@
 
 ---
 
-### █ Фаза 11 — Pets MVP 🔴
+### █ Фаза 11 — Pets MVP 🟢
 
 **Цель:** жанро-определяющая механика. Без неё mining-игра не выживает на Roblox.
 
-- [ ] **`shared/data/PetDatabase.lua`**: 8–10 питомцев, разные rarity (common → mythic), эффекты: `damageBoost`, `luckBoost` (шанс комнат), `coinBoost`, `multiMine` (шанс ломать 2 блока).
-- [ ] **`server/core/PetManager.lua`**: hatch egg, store в `playerData.pets`, equip slot (1 на старте).
-- [ ] **`server/core/EggManager.lua`**: 1 egg type для MVP («Basic Egg»), цена в монетах, weighted random hatch.
-- [ ] **`client/ui/PetsPanel.lua`**: вкладка в HUD, список петов, equip/unequip, индикатор бустов.
-- [ ] **Pet visual**: модель парит рядом с игроком (`Attachment` к HumanoidRootPart), вращается + bobbing анимация.
-- [ ] **Hatch animation**: открытие яйца с буст-эффектом, particle reveal, rarity-цвет.
-- [ ] **`Net:Handle("HatchEgg", count)`** — батч до 10 яиц за раз, для «open 10x».
+- [x] **`shared/data/PetDatabase.lua`**: 10 питомцев, разные rarity (common → mythic), эффекты: `damageBoost`, `luckBoost` (шанс комнат), `coinBoost`, `multiMine` (шанс ломать 2 блока). Каждый пет — `{ id, name, rarity, icon, color, effect = { kind, value } }`. Лукапы `byId` / `byRarity` строятся один раз.
+- [x] **`server/core/PetManager.lua`**: DI-менеджер (паттерн RebirthManager/DailyReward). `Net:Handle("HatchEgg", count)` (валидация монет, weighted roll, append в `playerData.pets`, авто-equip первого), `Net:Handle("EquipPet", uid)`, `Net:Handle("UnequipPet")`, `onProfileLoaded` (ensure-поля + чистка «висячего» equippedPet), dev-методы `devHatch/devGivePet/devClearPets`. 1 equip slot на старте (`Constants.PETS.maxEquipped`).
+- [x] **`server/core/EggManager.lua`**: 1 egg type («Basic Egg», `Constants.PETS.eggs.basic`), цена в монетах, `clampCount` (batch 1..10), `totalCost`, `hatch` делегирует weighted roll в `PetLogic.rollHatch`.
+- [x] **`client/ui/hud/panels/PetsPanel.lua`** (6-й таб 🐾): индикатор активных бустов, Basic Egg + кнопки «Открыть 1× / 10×», грид owned-петов через `s:Computed` ВНУТРИ `[Children]`, equip/unequip по клику. `client/ui/hud/components/PetCard.lua` — карточка пета (rarity-stroke, ZIndex 2+ на тексте).
+- [x] **Pet visual** (`client/ui/PetVisual.lua`): Neon-сфера rarity-цвета + BillboardGui-иконка парит сбоку от HumanoidRootPart, RenderStepped: орбита + bobbing (sin) + вращение. Респавн обрабатывается автоматически.
+- [x] **Hatch animation** (`client/ui/PetHatchFX.lua`): полноэкранный overlay — трясущееся 🥚 → rarity-цветной shockwave-burst → reveal-карточки с pop-in (Back/Out, stagger). Поддержка 1× и 10× (грид), tap-to-skip, авто-закрытие.
+- [x] **`Net:Handle("HatchEgg", count)`** — батч до 10 яиц за раз (`Constants.PETS.hatchBatchMax`), для «open 10×». Сервер клампит count.
+- [x] **Эффекты влияют на расчёты** (формулы — единый источник `shared/util/PetLogic.lua`): `damageBoost` → урон в `MiningEngine:hitBlock`; `luckBoost` → множитель шанса комнат; `multiMine` → доп. блок ломается мгновенно, кладётся в инвентарь; `coinBoost` → `SellInventory` аддитивно в boost-стадию (порядок multiSell→rebirth→boost сохранён).
+- [x] **DevCommands**: `/egg [N]`, `/hatch`, `/pet <id>`, `/clearpets`.
 
 **Тест:** купил Basic Egg → нажал HATCH → анимация → пет в инвентаре → equip → урон вырос. 10x работает.
+
+**Дата закрытия:** 2026-06-03.
 
 ---
 

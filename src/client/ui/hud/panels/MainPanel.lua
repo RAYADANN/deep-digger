@@ -11,6 +11,7 @@ local UpgradesPanel = require(script.Parent.UpgradesPanel)
 local StatsPanel = require(script.Parent.StatsPanel)
 local RebirthPanel = require(script.Parent.RebirthPanel)
 local LeaderboardPanel = require(script.Parent.LeaderboardPanel)
+local PetsPanel = require(script.Parent.PetsPanel)
 
 local OnEvent = Fusion.OnEvent
 local Children = Fusion.Children
@@ -62,6 +63,8 @@ function MainPanel.create(s: ScopeFactory.HudScope, state: HudStateModule.HudSta
                                 return "РЕБЁРТ"
                             elseif tab == "leaderboard" then
                                 return "🏆 ЛИДЕРБОРД"
+                            elseif tab == "pets" then
+                                return "🐾 ПИТОМЦЫ"
                             end
                             return "СТАТИСТИКА"
                         end),
@@ -101,6 +104,7 @@ function MainPanel.create(s: ScopeFactory.HudScope, state: HudStateModule.HudSta
                     StatsPanel.create(s, state),
                     RebirthPanel.create(s, state),
                     LeaderboardPanel.create(s, state),
+                    PetsPanel.create(s, state),
                 },
             }),
         },
