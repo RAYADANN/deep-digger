@@ -7,6 +7,7 @@ local shared = ReplicatedStorage:WaitForChild("shared")
 local modules = ReplicatedStorage:WaitForChild("Packages")
 
 local Logger = require(shared.util.Logger)
+local FreezeDiagnostics = require(script.core.FreezeDiagnostics)
 local MiningRenderer = require(script.core.MiningRenderer)
 local DepthTracker = require(script.core.DepthTracker)
 local LayerEnvironment = require(script.core.LayerEnvironment)
@@ -33,6 +34,12 @@ SoundManager.start()
 -- currentCamera() в модуле умеет fallback на workspace.CurrentCamera каждый кадр.
 CameraShake.start()
 
+-- Диагностика фризов: стартует сразу, чтобы поймать причины просадок FPS с
+-- первого кадра. Печатает причину каждого фриза (>100 мс) в консоль; полный
+-- отчёт — /diagreport. Переживает респавн (состояние в _G). Оверхед минимален
+-- (один Heartbeat + дешёвые счётчики PerfBeacon).
+FreezeDiagnostics.start({ freezeMs = 100 })
+
 local log = Logger.new("Client:Init")
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -52,27 +59,69 @@ depthTracker:onChanged(function(info)
     end)
 end)
 
--- Слушаем полные данные с сервера
--- Пока два события, объединяем:
+-- Слушаем полные данные с сервера (PlayerStats + PlayerInventory коалесим).
 local playerDataBuffer = {}
 
+local PerfBeacon = require(shared.util.PerfBeacon)
+
+--[[
+    Сервер шлёт PlayerStats и PlayerInventory с ОДИНАКОВЫМ payload (syncPlayerHud).
+    Без коалесинга клиент дважды прогоняет applyServerPayload (~150 мс ×2).
+    Склеиваем в один apply на следующий Heartbeat.
+]]
+local coalesceScheduled = false
+local coalescePayload: any = nil
+
 local function applyPlayerPayload(data)
+    PerfBeacon.bump("playerPayloadApply")
     for k, v in pairs(data) do
         playerDataBuffer[k] = v
     end
     renderer:setSwingDelay(data.speedLevel or 1)
     if hud then
+        local t0 = os.clock()
         hud:setPlayerData(playerDataBuffer)
+        PerfBeacon.addTime("hudSetDataMs", (os.clock() - t0) * 1000)
+        PerfBeacon.bump("hudSetData")
     end
-    -- Phase 11: парящий питомец отражает экипировку из payload'а.
-    -- equippedPet — это UID, а PetVisual ждёт petId; резолвим через PetLogic
-    -- (uid → запись в pets → petId). nil/нет пета → скрыть. pcall — падение
-    -- визуала не должно сорвать синк HUD.
     pcall(function()
         local equippedPets = PetLogic.getEquippedPets(playerDataBuffer)
         local def = equippedPets[1]
         PetVisual.setEquipped(def and def.id or nil)
     end)
+end
+
+local function scheduleFullHudApply(data)
+    coalescePayload = data
+    if coalesceScheduled then return end
+    coalesceScheduled = true
+    task.defer(function()
+        coalesceScheduled = false
+        local payload = coalescePayload
+        coalescePayload = nil
+        if payload then
+            applyPlayerPayload(payload)
+        end
+    end)
+end
+
+--[[
+    Горячая дельта после копания: только coins/inventory/stats (~4 поля Fusion
+    вместо ~30 ×2). Сервер шлёт PlayerHudDelta вместо полного syncPlayerHud.
+]]
+local function applyMiningHudDelta(delta)
+    if typeof(delta) ~= "table" then return end
+    PerfBeacon.bump("miningHudDelta")
+    if delta.coins ~= nil then playerDataBuffer.coins = delta.coins end
+    if delta.inventory ~= nil then playerDataBuffer.inventory = delta.inventory end
+    if delta.totalBlocksMined ~= nil then playerDataBuffer.totalBlocksMined = delta.totalBlocksMined end
+    if delta.totalCoinsEarned ~= nil then playerDataBuffer.totalCoinsEarned = delta.totalCoinsEarned end
+    if hud then
+        local t0 = os.clock()
+        hud:applyMiningDelta(delta)
+        PerfBeacon.addTime("hudMiningDeltaMs", (os.clock() - t0) * 1000)
+        PerfBeacon.bump("hudMiningDelta")
+    end
 end
 
 -- Phase 10: persistent scope для модального оверлея DailyRewardModal.
@@ -100,7 +149,7 @@ local function tryOpenDailyModal(dailyState: any)
 end
 
 Net:Connect("PlayerStats", function(data)
-    applyPlayerPayload(data)
+    scheduleFullHudApply(data)
     -- Phase 8: запускаем туториал, как только сервер прислал tutorialStep.
     -- Tutorial.start идемпотентен (early-return если уже running и если
     -- step >= 3), поэтому безопасно вызывать на каждый PlayerStats:
@@ -125,7 +174,10 @@ Net:Connect("PlayerStats", function(data)
     end
 end)
 Net:Connect("PlayerInventory", function(data)
-    applyPlayerPayload(data)
+    scheduleFullHudApply(data)
+end)
+Net:Connect("PlayerHudDelta", function(delta)
+    applyMiningHudDelta(delta)
 end)
 
 Net:Connect("Notify", function(payload)
@@ -195,6 +247,7 @@ local function onCharacterAdded(character: Model)
         hud:destroy()
         hud = nil
     end
+    renderer:stop() -- сброс сети/очереди перед повторным start (респавн)
     renderer:start()
     hud = HUD.new(player)
     layerEnvironment:reset()
@@ -234,10 +287,22 @@ player.Chatted:Connect(function(msg)
     elseif cmd == "/hpbar" then
         local on = renderer:toggleHPBar()
         log:info("HP bars:", if on then "ON" else "OFF")
+    elseif cmd == "/diagreport" then
+        FreezeDiagnostics.report()
+    elseif cmd == "/diagstop" then
+        FreezeDiagnostics.stop()
+    elseif cmd == "/diagstart" then
+        FreezeDiagnostics.start({ freezeMs = 100 })
+    elseif cmd == "/diagreset" then
+        FreezeDiagnostics.reset()
     elseif cmd == "/help" then
         print("--- Deep Digger Commands ---")
         print("/rarity - toggle rarity strips")
         print("/hpbar - toggle HP bars on hover")
+        print("/diagreport - печать отчёта о фризах/FPS с причинами")
+        print("/diagstop - стоп диагностики (+ финальный отчёт)")
+        print("/diagstart - старт диагностики")
+        print("/diagreset - сброс и перезапуск диагностики")
         print("/help - this message")
     end
 end)

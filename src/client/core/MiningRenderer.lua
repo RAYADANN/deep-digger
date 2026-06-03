@@ -6,6 +6,7 @@ local modules = game:GetService("ReplicatedStorage"):WaitForChild("Packages")
 local Logger = require(shared.util.Logger)
 local Constants = require(shared.constants)
 local UpgradeLogic = require(shared.util.UpgradeLogic)
+local PerfBeacon = require(shared.util.PerfBeacon)
 local Net = require(modules.Net)
 local OreLookup = require(script.Parent.OreLookup)
 local SoundManager = require(script.Parent.SoundManager)
@@ -15,6 +16,69 @@ local Haptics = require(script.Parent.Haptics)
 local TweenService = game:GetService("TweenService")
 local Debris = game:GetService("Debris")
 local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+-- Было MaxActivationDistance у ClickDetector; raycast только по папке шахты.
+local RAYCAST_DISTANCE = 200
+
+-- Бюджет создания блоков на кадр. Сервер при пробитии полости/комнаты шлёт
+-- дельту на десятки-сотни блоков; если строить их все синхронно в одном
+-- кадре — фриз 400–650 мс (замерено). Размазываем создание по кадрам:
+-- очередь дренируется по CREATE_BUDGET_PER_FRAME штук за Heartbeat.
+-- 25/кадр: стартовый снапшот (~2250) раскладывается за ~1.5 c, всплеск
+-- delta на 137 блоков — за ~6 кадров (~100 мс) вместо одного фриза.
+local CREATE_BUDGET_PER_FRAME = 25
+
+-- Массовое удаление в одной delta (комната/полость) — десятки _animateDestroy
+-- подряд, каждый с chunkBurst + dust + shockwave = фриз 400–1300 мс (замерено:
+-- Delta «-39» в одном кадре). Одиночный удар игрока = 1 removed → полный juice.
+local FAST_REMOVE_THRESHOLD = 3
+
+-- ===== Perf-инструментация (диагностика дублей подписки SyncBlocks) =====
+-- Публикуем счётчики атрибутами на workspace, чтобы читать из command bar / MCP
+-- во время Play (execute_luau видит инстансы клиента, но его _G изолирован от
+-- LocalScript-VM, поэтому атрибуты — надёжный общий канал).
+-- DD_syncListeners — активных подписок SyncBlocks (ждём ровно 1 после N респавнов).
+-- DD_dupFires — сколько раз ОДИН И ТОТ ЖЕ message обработан повторно (>0 = утечка
+-- листенера: Net вызывает все коннекшены с одной и той же таблицей message).
+-- DD_maxBatchCreated — самый большой created-батч за дельту.
+local PERF = {
+    syncListeners = 0,
+    deltaCalls = 0,
+    snapshotCalls = 0,
+    dupFires = 0,
+    lastBatchCreated = 0,
+    maxBatchCreated = 0,
+    totalCreatedSeen = 0,
+    createPartCount = 0,
+    createPartMsSum = 0,
+    createPartMsMax = 0,
+    drainMsMax = 0,
+    applyDeltaMsMax = 0,
+    fastRemoves = 0,
+    _seen = setmetatable({}, { __mode = "k" }), -- weak: message -> os.clock()
+}
+local function perfPublish()
+    workspace:SetAttribute("DD_syncListeners", PERF.syncListeners)
+    workspace:SetAttribute("DD_deltaCalls", PERF.deltaCalls)
+    workspace:SetAttribute("DD_snapshotCalls", PERF.snapshotCalls)
+    workspace:SetAttribute("DD_dupFires", PERF.dupFires)
+    workspace:SetAttribute("DD_lastBatchCreated", PERF.lastBatchCreated)
+    workspace:SetAttribute("DD_maxBatchCreated", PERF.maxBatchCreated)
+    workspace:SetAttribute("DD_totalCreatedSeen", PERF.totalCreatedSeen)
+    if PERF.createPartCount > 0 then
+        workspace:SetAttribute("DD_createPartMsAvg", math.floor(PERF.createPartMsSum / PERF.createPartCount))
+        workspace:SetAttribute("DD_createPartMsMax", math.floor(PERF.createPartMsMax))
+    end
+    workspace:SetAttribute("DD_drainMsMax", math.floor(PERF.drainMsMax))
+    workspace:SetAttribute("DD_applyDeltaMsMax", math.floor(PERF.applyDeltaMsMax))
+    workspace:SetAttribute("DD_fastRemoves", PERF.fastRemoves)
+end
+
+local function parseKey(k: string): (number, number, number)
+    local parts = string.split(k, "_")
+    return tonumber(parts[1]) or 0, tonumber(parts[2]) or 0, tonumber(parts[3]) or 0
+end
 
 local MiningRenderer = {}
 MiningRenderer.__index = MiningRenderer
@@ -36,22 +100,23 @@ local HOVER_BSv = BSv * 1.05
 --      sparkle-частицы. Это "руда разлетелась на куски", не "магия".
 
 -- Сколько физических осколков на break, по rarity. На каждом chunk'е GC висит
--- через Debris, лимит подобран чтобы 50+ блоков подряд не разорвали FPS.
+-- через Debris. Урезано (perf): common-руды = 80% копания, лишние парты с
+-- физикой на каждом разрушении = микрофризы при быстром копании.
 local BREAK_CHUNK_COUNT = {
-    common = 6,
-    uncommon = 8,
-    rare = 12,
-    epic = 16,
-    legendary = 22,
-    mythic = 30,
+    common = 3,
+    uncommon = 4,
+    rare = 6,
+    epic = 9,
+    legendary = 14,
+    mythic = 20,
 }
 local BREAK_DUST_COUNT = {
-    common = 8,
-    uncommon = 10,
-    rare = 14,
-    epic = 18,
-    legendary = 24,
-    mythic = 32,
+    common = 4,
+    uncommon = 5,
+    rare = 8,
+    epic = 11,
+    legendary = 16,
+    mythic = 22,
 }
 local BREAK_CHUNK_SPEED = {
     common = 10,
@@ -85,7 +150,7 @@ end
 -- 2250 common-блоков остаются дешёвыми (SmoothPlastic без света).
 --
 -- Поля:
---   material     — Enum.Material блока (Neon = самосвечение для mythic).
+--   material     — Enum.Material блока (дешёвые: Slate/Rock/Foil; Neon с блоков убран).
 --   reflectance  — 0..1 блеск (Gold/Diamond «искрятся» под Lighting).
 --   light        — nil или { range, brightness } для PointLight-ауры.
 --   pulse        — true → лёгкая пульсация яркости света (legendary/mythic).
@@ -98,20 +163,34 @@ type RarityVisual = {
     sparkleRate: number,
 }
 
+-- PointLight только с epic+ (rare убран): ~15% блоков были бы rare → сотни
+-- динамических источников света в тоннеле, Roblox такое не тянет. rare сохраняет
+-- телеграф через материал/reflectance + sparkle. Свет epic+ дополнительно
+-- ограничен MAX_RARITY_GLOWS (см. ниже) от накопления за длинную сессию.
 local ORE_VISUAL_BY_RARITY: { [string]: RarityVisual } = {
+    -- common/uncommon: reflectance = 0 — отражения сэмплят окружение каждый кадр,
+    -- а это ~80% всех блоков. Блеск оставлен только rare+ (телеграф ценности).
     common = { material = Enum.Material.Slate, reflectance = 0.0, light = nil, pulse = false, sparkleRate = 0 },
-    uncommon = { material = Enum.Material.Rock, reflectance = 0.04, light = nil, pulse = false, sparkleRate = 0 },
-    rare = { material = Enum.Material.Marble, reflectance = 0.16, light = { range = 6, brightness = 0.7 }, pulse = false, sparkleRate = 1.5 },
-    epic = { material = Enum.Material.Glass, reflectance = 0.28, light = { range = 8, brightness = 1.1 }, pulse = false, sparkleRate = 3 },
-    legendary = { material = Enum.Material.Foil, reflectance = 0.4, light = { range = 10, brightness = 1.7 }, pulse = true, sparkleRate = 5 },
-    mythic = { material = Enum.Material.Neon, reflectance = 0.0, light = { range = 13, brightness = 2.4 }, pulse = true, sparkleRate = 9 },
+    uncommon = { material = Enum.Material.Rock, reflectance = 0.0, light = nil, pulse = false, sparkleRate = 0 },
+    -- sparkleRate: rare = 0 (это ~15% блоков → сотни вечных эмиттеров). Sparkle
+    -- оставлен только epic+ и снижен — постоянные ParticleEmitter'ы крутятся
+    -- каждый кадр даже без кликов. rare телеграфится материалом Marble.
+    rare = { material = Enum.Material.Marble, reflectance = 0.16, light = nil, pulse = false, sparkleRate = 0 },
+    epic = { material = Enum.Material.Glass, reflectance = 0.28, light = { range = 8, brightness = 1.1 }, pulse = false, sparkleRate = 1.5 },
+    legendary = { material = Enum.Material.Foil, reflectance = 0.4, light = { range = 10, brightness = 1.7 }, pulse = true, sparkleRate = 2.5 },
+    mythic = { material = Enum.Material.Foil, reflectance = 0.0, light = { range = 13, brightness = 2.4 }, pulse = true, sparkleRate = 4 },
 }
 
 local DEFAULT_VISUAL: RarityVisual = ORE_VISUAL_BY_RARITY.common
 
+-- Жёсткий кап на одновременные rarity-PointLight'ы. Даже epic+ копятся за
+-- сессию (раскопанные стены не выгружаются); без капа это сотни источников.
+local MAX_RARITY_GLOWS = 40
+
 -- Shockwave: расширяющаяся neon-сфера. Это "ударная волна" в точке разрушения.
 -- Полностью локальный эффект — никаких ScreenGui, никаких CC-эффектов.
 local function shockwave(parent: Instance, position: Vector3, color: Color3, finalSize: number, duration: number)
+    PerfBeacon.bump("fxShockwave")
     local sphere = Instance.new("Part")
     sphere.Shape = Enum.PartType.Ball
     sphere.Size = Vector3.new(0.5, 0.5, 0.5)
@@ -133,6 +212,7 @@ end
 -- ключевой mining-эффект. SmoothPlastic + цвет руды, gravity-affected, fade
 -- через Debris.
 local function chunkBurst(parent: Instance, position: Vector3, color: Color3, count: number, scatter: number)
+    PerfBeacon.bump("fxChunks", count)
     local chunkSize = BS * 0.18
     for _ = 1, count do
         local size = chunkSize * (0.6 + math.random() * 0.7)
@@ -181,6 +261,7 @@ end
 -- Dust cloud: облако пыли цвета руды. Используется smoke_main (не sparkle) —
 -- даёт ощущение "блок осыпался", а не "магическая вспышка".
 local function dustCloud(host: BasePart, color: Color3, count: number, scale: number?)
+    PerfBeacon.bump("fxDust")
     local s = scale or 1
     local e = Instance.new("ParticleEmitter")
     e.Texture = "rbxasset://textures/particles/smoke_main.dds"
@@ -216,6 +297,7 @@ end
 -- игрок копает РАДИ ЭТОГО, и каждое разрушение должно показывать награду.
 local function coinPop(parent: Instance, position: Vector3, value: number, rarity: string)
     if value <= 0 then return end
+    PerfBeacon.bump("fxCoinPop")
     local host = Instance.new("Part")
     host.Size = Vector3.new(0.1, 0.1, 0.1)
     host.Anchored = true; host.CanCollide = false; host.CanTouch = false
@@ -309,9 +391,21 @@ function MiningRenderer.new()
     local self = setmetatable({}, MiningRenderer)
     self._parts = {}; self._blockData = {}; self._parent = nil; self._enabled = false
     self._showRarity = false; self._showHPBar = true
+    self._activeGlows = 0 -- счётчик живых rarity-PointLight'ов (кап MAX_RARITY_GLOWS)
     self._lastSwingAt = 0
     self._swingDelay = UpgradeLogic.swingDelaySeconds(1)
     self._log = Logger.new("MiningRenderer")
+    self._hoveredKey = nil :: string?
+    self._rayParams = nil :: RaycastParams?
+    self._inputConn = nil :: RBXScriptConnection?
+    self._hoverConn = nil :: RBXScriptConnection?
+    -- Очередь отложенного создания блоков (анти-фриз, см. CREATE_BUDGET_PER_FRAME).
+    self._createQueue = {}      -- FIFO-массив entry'ев {key,x,z,y,oreId,hp,maxHp}
+    self._createHead = 1        -- индекс головы очереди (без table.remove, O(1))
+    self._createPending = {}    -- key -> entry: для отмены/замены до создания
+    self._createConn = nil :: RBXScriptConnection?
+    self._syncConn = nil :: RBXScriptConnection?
+    self._gen = 0 -- поколение (см. _isStale); проставляется в start()
     return self
 end
 
@@ -321,7 +415,141 @@ end
 
 function MiningRenderer:_folder()
     if self._parent and self._parent.Parent then return end
+    -- Чистим осиротевшие папки от прошлых жизней. Клиентские скрипты
+    -- перезагружаются на КАЖДОМ респавне (PlayerGui reset), и старый renderer
+    -- НЕ получает stop() — его DeepDigger_Mine с 2250+ партами остаётся в
+    -- workspace навсегда (парты не привязаны к скрипту). За N смертей это
+    -- N×2900 партов в сцене → нарастающий overdraw и фризы. Сносим всё лишнее.
+    for _, c in workspace:GetChildren() do
+        if c.Name == "DeepDigger_Mine" then c:Destroy() end
+    end
     local f = Instance.new("Folder"); f.Name = "DeepDigger_Mine"; f.Parent = workspace; self._parent = f
+    self._rayParams = nil -- пересоздадим с новым FilterDescendantsInstances
+end
+
+-- Поколение активного renderer'а. _G переживает респавн (Luau-VM клиента не
+-- пересоздаётся, только скрипты), поэтому это надёжный кросс-жизненный токен.
+-- Любой renderer из прошлой жизни (если его коннекшены пережили destroy
+-- скрипта) увидит, что он больше не активен, и сам себя выключит.
+function MiningRenderer:_isStale(): boolean
+    return self._gen ~= (_G :: any).DD_RENDER_GEN
+end
+
+function MiningRenderer:_raycastParams(): RaycastParams?
+    if not self._parent then return nil end
+    if not self._rayParams then
+        local p = RaycastParams.new()
+        p.FilterType = Enum.RaycastFilterType.Include
+        p.IgnoreWater = true
+        self._rayParams = p
+    end
+    self._rayParams.FilterDescendantsInstances = { self._parent }
+    return self._rayParams
+end
+
+function MiningRenderer:_raycastBlockPart(screenPos: Vector2?): BasePart?
+    local cam = workspace.CurrentCamera
+    local params = self:_raycastParams()
+    if not cam or not params then return nil end
+    PerfBeacon.bump("raycasts")
+    local mouse = screenPos or UserInputService:GetMouseLocation()
+    local ray = cam:ViewportPointToRay(mouse.X, mouse.Y)
+    local hit = workspace:Raycast(ray.Origin, ray.Direction * RAYCAST_DISTANCE, params)
+    if hit and hit.Instance:IsA("BasePart") and self._parts[hit.Instance.Name] then
+        if hit.Instance:GetAttribute("_destroying") then return nil end
+        return hit.Instance
+    end
+    return nil
+end
+
+function MiningRenderer:_hoverEnter(key: string)
+    local part = self._parts[key]
+    if not part or part:GetAttribute("_destroying") then return end
+    part:SetAttribute("_hovered", true)
+    if self._showHPBar then
+        local gui = self:_ensureHPBar(key)
+        if gui then gui.Enabled = true end
+    end
+    local light = Instance.new("PointLight")
+    light.Name = "HoverLight"; light.Brightness = 1.2; light.Range = 6
+    light.Color = Color3.fromRGB(255, 210, 80); light.Parent = part
+    local sel = Instance.new("SelectionBox")
+    sel.Name = "HoverSel"; sel.Adornee = part; sel.LineThickness = 0.04
+    sel.Color3 = Color3.fromRGB(255, 230, 120); sel.SurfaceTransparency = 0.9; sel.Parent = part
+    if not part:GetAttribute("_squashing") then
+        TweenService:Create(part, TweenInfo.new(0.1, Enum.EasingStyle.Quad), { Size = HOVER_BSv }):Play()
+    end
+end
+
+function MiningRenderer:_hoverLeave(key: string)
+    local part = self._parts[key]
+    if not part then return end
+    part:SetAttribute("_hovered", false)
+    local hd = self._blockData[key]
+    if hd and hd.hpGui then hd.hpGui.Enabled = false end
+    local li = part:FindFirstChild("HoverLight"); if li then li:Destroy() end
+    local sel = part:FindFirstChild("HoverSel"); if sel then sel:Destroy() end
+    if part:GetAttribute("_destroying") then return end
+    if not part:GetAttribute("_squashing") then
+        TweenService:Create(part, TweenInfo.new(0.1, Enum.EasingStyle.Quad), { Size = BSv }):Play()
+    end
+end
+
+function MiningRenderer:_updateHover()
+    local part = self:_raycastBlockPart()
+    local key = if part then part.Name else nil
+    if key == self._hoveredKey then return end
+    if self._hoveredKey then
+        self:_hoverLeave(self._hoveredKey)
+    end
+    self._hoveredKey = key
+    if key then
+        self:_hoverEnter(key)
+    end
+end
+
+function MiningRenderer:_setupInput()
+    self:_teardownInput()
+    self._inputConn = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if self:_isStale() then self:stop(); return end
+        if not self._enabled or gameProcessed then return end
+        if input.UserInputType ~= Enum.UserInputType.MouseButton1
+            and input.UserInputType ~= Enum.UserInputType.Touch then
+            return
+        end
+        local screenPos = if input.UserInputType == Enum.UserInputType.Touch
+            then Vector2.new(input.Position.X, input.Position.Y)
+            else nil
+        local part = self:_raycastBlockPart(screenPos)
+        if not part then return end
+        local key = part.Name
+        local x, z, y = parseKey(key)
+        self:_onClick(key, x, z, y)
+    end)
+    self._hoverConn = RunService.RenderStepped:Connect(function()
+        if self:_isStale() then self:stop(); return end
+        if self._enabled then
+            self:_updateHover()
+        end
+    end)
+    -- Дренаж очереди создания блоков (анти-фриз). На Heartbeat, чтобы не
+    -- конкурировать с рендером за время кадра.
+    self._createConn = RunService.Heartbeat:Connect(function()
+        if self:_isStale() then self:stop(); return end
+        if self._enabled then
+            self:_drainCreateQueue()
+        end
+    end)
+end
+
+function MiningRenderer:_teardownInput()
+    if self._inputConn then self._inputConn:Disconnect(); self._inputConn = nil end
+    if self._hoverConn then self._hoverConn:Disconnect(); self._hoverConn = nil end
+    if self._createConn then self._createConn:Disconnect(); self._createConn = nil end
+    if self._hoveredKey then
+        self:_hoverLeave(self._hoveredKey)
+        self._hoveredKey = nil
+    end
 end
 
 function MiningRenderer:_makeHPBar(hp, maxHp)
@@ -353,22 +581,55 @@ function MiningRenderer:_updateHPBar(hp, maxHp, fill, txt)
     else fill.BackgroundColor3 = Color3.fromRGB(240, 45, 45) end
 end
 
+-- Ленивое создание HP-бара: BillboardGui строится при первом наведении, а не
+-- для каждого из тысяч блоков сразу. Наводится всегда один блок за раз.
+function MiningRenderer:_ensureHPBar(key)
+    local d = self._blockData[key]; local part = self._parts[key]
+    if not d or not part then return nil end
+    if d.hpGui then return d.hpGui end
+    local gui, fill, txt = self:_makeHPBar(d.hp, d.maxHp)
+    gui.Parent = part
+    d.hpGui = gui; d.hpFill = fill; d.hpTxt = txt
+    return gui
+end
+
+-- Ленивое создание rarity-плашки: по умолчанию выключена (/rarity), большинство
+-- игроков её не включает — не плодим тысячи скрытых BillboardGui.
+function MiningRenderer:_ensureRarityTag(key)
+    local d = self._blockData[key]; local part = self._parts[key]
+    if not d or not part then return nil end
+    if d.rarityTag then return d.rarityTag end
+    local rarColor = OreLookup.getRarityColor(d.oreId)
+    local tag = Instance.new("BillboardGui"); tag.Size = UDim2.fromOffset(50, 6)
+    tag.StudsOffset = Vector3.new(0, 3.2, 0); tag.AlwaysOnTop = true
+    tag.ClipsDescendants = false; tag.Enabled = false
+    local bar = Instance.new("Frame"); bar.Size = UDim2.fromScale(1, 1)
+    bar.BackgroundColor3 = rarColor; bar.BorderSizePixel = 0; bar.BackgroundTransparency = 0.1
+    Instance.new("UICorner", bar).CornerRadius = UDim.new(0, 3); bar.Parent = tag; tag.Parent = part
+    d.rarityTag = tag
+    return tag
+end
+
 function MiningRenderer:_createPart(x, z, y, oreId, hp, maxHp)
+    PerfBeacon.bump("partsCreated")
     local key = string.format("%d_%d_%d", x, z, y)
     local part = Instance.new("Part")
     part.Name = key; part.Size = BSv; part.Anchored = true
-    part.CanCollide = true; part.CanTouch = false; part.CastShadow = true
+    -- CastShadow=false: блоки под землёй, их тени не видны игроку, а ~2250+
+    -- shadow-casting парт'ов — главный убийца FPS (shadowmap/voxel lighting
+    -- считает тени для каждого). Все динамические FX тоже идут без теней.
+    part.CanCollide = true; part.CanTouch = false; part.CastShadow = false
     part.BrickColor = BrickColor.new(OreLookup.getColor(oreId))
 
     -- Rarity-телеграф материала/блеска (см. ORE_VISUAL_BY_RARITY). OreDef.material
-    -- / glow / reflectance (задел Фазы 14) переопределяют дефолт по редкости.
+    -- / glow / reflectance (Фаза 14) переопределяют дефолт по редкости.
     local rarity = OreLookup.getRarity(oreId)
     local visual = ORE_VISUAL_BY_RARITY[rarity] or DEFAULT_VISUAL
     local def = OreLookup.getDef(oreId)
     local mat = visual.material
     local refl = visual.reflectance
     if def then
-        if def.glow then mat = Enum.Material.Neon end
+        if def.glow then mat = Enum.Material.Foil end
         if def.material then mat = def.material end
         if def.reflectance ~= nil then refl = def.reflectance end
     end
@@ -378,63 +639,16 @@ function MiningRenderer:_createPart(x, z, y, oreId, hp, maxHp)
     local px = x * BS; local pz = z * BS + 30
     local py = -(y * BS + BS / 2)
     part.Position = Vector3.new(px, py, pz)
-
-    local det = Instance.new("ClickDetector")
-    det.MaxActivationDistance = 200; det.Parent = part
-    det.MouseClick:Connect(function(plr)
-        if plr == game:GetService("Players").LocalPlayer then self:_onClick(key, x, z, y) end
-    end)
-
-    local hpGui, hpFill, hpTxt = self:_makeHPBar(hp, maxHp)
-    hpGui.Parent = part
-
-    det.MouseHoverEnter:Connect(function()
-        -- Если блок уже начал разрушаться — никаких эффектов hover,
-        -- они конфликтуют с shrink/fade-tween'ом из _animateDestroy.
-        if part:GetAttribute("_destroying") then return end
-        part:SetAttribute("_hovered", true)
-        if self._showHPBar then hpGui.Enabled = true end
-        local light = Instance.new("PointLight")
-        light.Name = "HoverLight"; light.Brightness = 1.2; light.Range = 6
-        light.Color = Color3.fromRGB(255, 210, 80); light.Parent = part
-        local sel = Instance.new("SelectionBox")
-        sel.Name = "HoverSel"; sel.Adornee = part; sel.LineThickness = 0.04
-        sel.Color3 = Color3.fromRGB(255, 230, 120); sel.SurfaceTransparency = 0.9; sel.Parent = part
-
-        -- Лёгкий "приподнимаем" блок при наведении (Size = BSv * 1.05).
-        -- TweenService автоматически отменит предыдущий tween на этом
-        -- свойстве, а гард на _destroying гарантирует, что мы не оживим
-        -- умирающий блок. _hovered нужен blockSquash'у, чтобы знать к
-        -- какому размеру возвращаться после приплющивания.
-        if not part:GetAttribute("_squashing") then
-            local t = TweenService:Create(part, TweenInfo.new(0.1, Enum.EasingStyle.Quad), { Size = HOVER_BSv })
-            t:Play()
-        end
-    end)
-    det.MouseHoverLeave:Connect(function()
-        part:SetAttribute("_hovered", false)
-        hpGui.Enabled = false
-        local li = part:FindFirstChild("HoverLight"); if li then li:Destroy() end
-        local sel = part:FindFirstChild("HoverSel"); if sel then sel:Destroy() end
-        if part:GetAttribute("_destroying") then return end
-        if not part:GetAttribute("_squashing") then
-            local t = TweenService:Create(part, TweenInfo.new(0.1, Enum.EasingStyle.Quad), { Size = BSv })
-            t:Play()
-        end
-    end)
+    -- Клик/hover — один raycast (UserInputService + RenderStepped), не ClickDetector на каждый блок.
 
     local rar = rarity
     local rarColor = OreLookup.getRarityColor(oreId)
-    local tag = Instance.new("BillboardGui"); tag.Size = UDim2.fromOffset(50, 6)
-    tag.StudsOffset = Vector3.new(0, 3.2, 0); tag.AlwaysOnTop = true
-    tag.ClipsDescendants = false; tag.Enabled = self._showRarity
-    local bar = Instance.new("Frame"); bar.Size = UDim2.fromScale(1, 1)
-    bar.BackgroundColor3 = rarColor; bar.BorderSizePixel = 0; bar.BackgroundTransparency = 0.1
-    Instance.new("UICorner", bar).CornerRadius = UDim.new(0, 3); bar.Parent = tag; tag.Parent = part
+    -- Rarity-плашка создаётся лениво (см. _ensureRarityTag), по умолчанию off.
 
-    -- Аура свечения rare+: PointLight цвета редкости. legendary/mythic — пульс.
-    -- Создаётся ТОЛЬКО для редких руд (их единицы), common-блоки без света.
-    if visual.light then
+    -- Аура свечения epic+: PointLight цвета редкости. legendary/mythic — пульс.
+    -- Создаётся только под капом MAX_RARITY_GLOWS — иначе сотни лампочек в шахте.
+    local hasGlow = false
+    if visual.light and self._activeGlows < MAX_RARITY_GLOWS then
         local glow = Instance.new("PointLight")
         glow.Name = "RarityGlow"
         glow.Color = rarColor
@@ -450,6 +664,8 @@ function MiningRenderer:_createPart(x, z, y, oreId, hp, maxHp)
             )
             pulseTween:Play()
         end
+        self._activeGlows += 1
+        hasGlow = true
     end
 
     -- Sparkle-частицы цвета редкости (rare+). Размер/частота растут с rarity.
@@ -476,10 +692,24 @@ function MiningRenderer:_createPart(x, z, y, oreId, hp, maxHp)
     end
 
     self._parts[key] = part
-    self._blockData[key] = { oreId = oreId, hp = hp, maxHp = maxHp, hpFill = hpFill, hpTxt = hpTxt, hpGui = hpGui, rarityTag = tag }
+    self._blockData[key] = { oreId = oreId, hp = hp, maxHp = maxHp, hasGlow = hasGlow }
+
+    -- Если плашки редкости включены глобально (/rarity), показать её и на
+    -- свежесозданном блоке (например, пришедшем delta'ой).
+    if self._showRarity then
+        local t = self:_ensureRarityTag(key)
+        if t then t.Enabled = true end
+    end
 end
 
 function MiningRenderer:_destroyPart(key)
+    PerfBeacon.bump("partsDestroyed")
+    if self._hoveredKey == key then
+        self:_hoverLeave(key)
+        self._hoveredKey = nil
+    end
+    local d = self._blockData[key]
+    if d and d.hasGlow then self._activeGlows = math.max(0, self._activeGlows - 1) end
     local p = self._parts[key]; if p then p:Destroy(); self._parts[key] = nil; self._blockData[key] = nil end
 end
 
@@ -492,10 +722,10 @@ end
 function MiningRenderer:_hitParticles(key, oreId)
     local p = self._parts[key]; if not p then return end
     local color = OreLookup.getColor(oreId)
-    -- Мягкое облако пыли (4 частицы — лёгкий puff, не магия)
-    dustCloud(p, color, 4, 0.7)
-    -- Маленький разлёт chunks (4 осколка) — игрок видит, что "что-то откололось"
-    chunkBurst(self._parent, p.Position, color, 4, 7)
+    -- Срабатывает на КАЖДЫЙ удар (~4/сек) — держим минимум: 2 частицы пыли,
+    -- без chunk-партов (их физика на каждом тычке = постоянная нагрузка).
+    -- Полноценный разлёт chunks остаётся на разрушении (_breakEffect).
+    dustCloud(p, color, 2, 0.6)
 end
 
 function MiningRenderer:_breakEffect(key, oreId)
@@ -542,6 +772,7 @@ end
 function MiningRenderer:_animateDestroy(key)
     local p = self._parts[key]; if not p then return end
     if p:GetAttribute("_destroying") then return end
+    PerfBeacon.bump("animDestroy")
     p:SetAttribute("_destroying", true)
 
     local d = self._blockData[key]
@@ -598,6 +829,7 @@ end
 
 function MiningRenderer:_dmgNumber(key, dmg, crit, oreId)
     local p = self._parts[key]; if not p then return end
+    PerfBeacon.bump("fxDmgNumber")
     local d = self._blockData[key]
     oreId = oreId or (d and d.oreId) or "dirt"
 
@@ -689,6 +921,7 @@ function MiningRenderer:_onClick(key, x, z, y)
     end
     self._lastSwingAt = now
 
+    PerfBeacon.bump("mineInvokes")
     local ok, res = pcall(function() return Net:Invoke("MineBlock", { { x = x, z = z, y = y } }) end)
     if not ok or not res then return end
     local r = res[1]; if not r or not r.success then return end
@@ -727,21 +960,86 @@ function MiningRenderer:_onClick(key, x, z, y)
     end
 end
 
-local function parseKey(k: string): (number, number, number)
-    local parts = string.split(k, "_")
-    return tonumber(parts[1]) or 0, tonumber(parts[2]) or 0, tonumber(parts[3]) or 0
+--[[
+    Ставит блок в очередь на создание. Если он уже ждёт в очереди — обновляет
+    данные на месте (последнее состояние сервера побеждает). Реальное создание
+    происходит в _drainCreateQueue по бюджету на кадр.
+]]
+function MiningRenderer:_queueCreate(key, x, z, y, oreId, hp, maxHp)
+    local existing = self._createPending[key]
+    if existing then
+        existing.x, existing.z, existing.y = x, z, y
+        existing.oreId, existing.hp, existing.maxHp = oreId, hp, maxHp
+        return
+    end
+    local entry = { key = key, x = x, z = z, y = y, oreId = oreId, hp = hp, maxHp = maxHp }
+    self._createPending[key] = entry
+    self._createQueue[#self._createQueue + 1] = entry
+end
+
+--[[
+    Полностью очищает очередь создания (при снапшоте/стопе).
+]]
+function MiningRenderer:_clearCreateQueue()
+    self._createQueue = {}
+    self._createHead = 1
+    self._createPending = {}
+end
+
+--[[
+    Дренаж очереди: создаём до CREATE_BUDGET_PER_FRAME блоков за кадр.
+    Отменённые entry'и (key убран из _createPending) пропускаем, не тратя бюджет.
+]]
+function MiningRenderer:_drainCreateQueue()
+    local q = self._createQueue
+    local n = #q
+    local head = self._createHead
+    if head > n then return end
+    local drainT0 = os.clock()
+    local budget = CREATE_BUDGET_PER_FRAME
+    local created = 0
+    while budget > 0 and head <= n do
+        local entry = q[head]
+        q[head] = nil
+        head += 1
+        if entry and self._createPending[entry.key] == entry then
+            self._createPending[entry.key] = nil
+            if not self._parts[entry.key] then
+                local t0 = os.clock()
+                self:_createPart(entry.x, entry.z, entry.y, entry.oreId, entry.hp, entry.maxHp)
+                local ms = (os.clock() - t0) * 1000
+                PERF.createPartCount += 1
+                PERF.createPartMsSum += ms
+                if ms > PERF.createPartMsMax then PERF.createPartMsMax = ms end
+                created += 1
+            end
+            budget -= 1
+        end
+    end
+    self._createHead = head
+    if head > n then -- очередь исчерпана — сбрасываем буфер
+        self._createQueue = {}
+        self._createHead = 1
+    end
+    local drainMs = (os.clock() - drainT0) * 1000
+    if drainMs > PERF.drainMsMax then PERF.drainMsMax = drainMs end
+    if created > 0 then perfPublish() end
 end
 
 --[[
     Полная замена видимых блоков. Используется один раз при заходе
-    игрока (и теоретически после resetPlayer).
+    игрока (и теоретически после resetPlayer). Создание размазано по кадрам.
 ]]
 function MiningRenderer:applySnapshot(blocks)
+    PERF.snapshotCalls += 1
+    PerfBeacon.bump("snapshotCalls")
+    perfPublish()
     self._log:debug("Snapshot:", #blocks, "blocks")
     for k, _ in pairs(self._parts) do self:_destroyPart(k) end
+    self:_clearCreateQueue()
     for _, b in ipairs(blocks) do
         local x, z, y = parseKey(b.key)
-        self:_createPart(x, z, y, b.oreId, b.hp, b.maxHp)
+        self:_queueCreate(b.key, x, z, y, b.oreId, b.hp, b.maxHp)
     end
 end
 
@@ -751,10 +1049,31 @@ end
 ]]
 function MiningRenderer:applyDelta(delta)
     if typeof(delta) ~= "table" then return end
-    self._log:debug("Delta: +", #(delta.created or {}), "~", #(delta.updated or {}), "-", #(delta.removed or {}))
+    local deltaT0 = os.clock()
+    local createdN = #(delta.created or {})
+    local removedN = #(delta.removed or {})
+    local updatedN = #(delta.updated or {})
+    PERF.deltaCalls += 1
+    PERF.lastBatchCreated = createdN
+    PERF.totalCreatedSeen += createdN
+    if createdN > PERF.maxBatchCreated then PERF.maxBatchCreated = createdN end
+    PerfBeacon.bump("deltaCalls")
+    PerfBeacon.bump("deltaCreated", createdN)
+    PerfBeacon.bump("deltaRemoved", removedN)
+    PerfBeacon.bump("deltaUpdated", updatedN)
+    self._log:debug("Delta: +", createdN, "~", #(delta.updated or {}), "-", removedN)
+    local fastRemove = removedN > FAST_REMOVE_THRESHOLD
     for _, k in ipairs(delta.removed or {}) do
+        -- Если блок ещё ждёт создания в очереди — отменяем, чтобы не построить
+        -- уже удалённый блок.
+        if self._createPending[k] then self._createPending[k] = nil end
         if self._parts[k] then
-            self:_animateDestroy(k)
+            if fastRemove then
+                PERF.fastRemoves += 1
+                self:_destroyPart(k)
+            else
+                self:_animateDestroy(k)
+            end
         end
     end
     for _, b in ipairs(delta.created or {}) do
@@ -762,11 +1081,19 @@ function MiningRenderer:applyDelta(delta)
             self:_destroyPart(b.key)
         end
         local x, z, y = parseKey(b.key)
-        self:_createPart(x, z, y, b.oreId, b.hp, b.maxHp)
+        self:_queueCreate(b.key, x, z, y, b.oreId, b.hp, b.maxHp)
     end
     for _, u in ipairs(delta.updated or {}) do
-        self:_updateVisual(u.key, u.hp)
+        local pending = self._createPending[u.key]
+        if pending then
+            pending.hp = u.hp -- блок ещё не создан — обновим стартовый hp
+        else
+            self:_updateVisual(u.key, u.hp)
+        end
     end
+    local deltaMs = (os.clock() - deltaT0) * 1000
+    if deltaMs > PERF.applyDeltaMsMax then PERF.applyDeltaMsMax = deltaMs end
+    perfPublish()
 end
 
 --[[
@@ -774,6 +1101,15 @@ end
 ]]
 function MiningRenderer:syncBlocks(message)
     if typeof(message) ~= "table" then return end
+    if self:_isStale() then self:stop(); return end
+    -- Детект дубля листенера: Net вызывает ВСЕ подписки с одной и той же
+    -- таблицей message. Если мы уже видели этот объект — обрабатываем повторно.
+    if PERF._seen[message] then
+        PERF.dupFires += 1
+        perfPublish()
+    else
+        PERF._seen[message] = os.clock()
+    end
     if message.kind == "snapshot" then
         self:applySnapshot(message.payload or {})
     elseif message.kind == "delta" then
@@ -783,25 +1119,63 @@ end
 
 function MiningRenderer:toggleRarity()
     self._showRarity = not self._showRarity
-    for _, d in pairs(self._blockData) do if d.rarityTag then d.rarityTag.Enabled = self._showRarity end end
+    -- Включение плашек строит их лениво (один проход по видимым блокам).
+    -- Выключение — просто гасит уже созданные.
+    for key, d in pairs(self._blockData) do
+        if self._showRarity then
+            local t = self:_ensureRarityTag(key)
+            if t then t.Enabled = true end
+        elseif d.rarityTag then
+            d.rarityTag.Enabled = false
+        end
+    end
     return self._showRarity
 end
 function MiningRenderer:toggleHPBar()
     self._showHPBar = not self._showHPBar
-    for _, d in pairs(self._blockData) do if d.hpGui then d.hpGui.Enabled = self._showHPBar end end
+    -- HP-бар появляется по наведению; при выключении гасим уже созданные.
+    if not self._showHPBar then
+        for _, d in pairs(self._blockData) do if d.hpGui then d.hpGui.Enabled = false end end
+    end
     return self._showHPBar
 end
 
 function MiningRenderer:start()
-    self._enabled = true; self:_folder()
-    Net:Connect("SyncBlocks", function(blocks) if self._enabled then self:syncBlocks(blocks) end end)
+    self._enabled = true
+    -- Захватываем поколение ДО создания папки: новый активный renderer, любой
+    -- старый автоматически считается stale и выключится на следующем тике.
+    local gen = ((_G :: any).DD_RENDER_GEN or 0) + 1
+    ;(_G :: any).DD_RENDER_GEN = gen
+    self._gen = gen
+    self:_folder()
+    self:_setupInput()
+    -- Один listener на SyncBlocks. start() вызывается на каждый CharacterAdded;
+    -- без отписки каждый респавн дублировал обработку delta (×2, ×3…) и
+    -- раздувал очередь/фризы даже с CREATE_BUDGET_PER_FRAME.
+    if self._syncConn then
+        self._syncConn:Disconnect(); self._syncConn = nil
+        PERF.syncListeners = math.max(0, PERF.syncListeners - 1)
+    end
+    self._syncConn = Net:Connect("SyncBlocks", function(blocks)
+        if self:_isStale() then self:stop(); return end
+        if self._enabled then self:syncBlocks(blocks) end
+    end)
+    PERF.syncListeners += 1
+    perfPublish()
     self._log:info("MiningRenderer started")
 end
 
 function MiningRenderer:stop()
     self._enabled = false
+    if self._syncConn then
+        self._syncConn:Disconnect(); self._syncConn = nil
+        PERF.syncListeners = math.max(0, PERF.syncListeners - 1)
+        perfPublish()
+    end
+    self:_teardownInput()
     for _, p in pairs(self._parts) do p:Destroy() end
-    self._parts = {}; self._blockData = {}
+    self._parts = {}; self._blockData = {}; self._activeGlows = 0
+    self:_clearCreateQueue()
     if self._parent then self._parent:Destroy(); self._parent = nil end
 end
 

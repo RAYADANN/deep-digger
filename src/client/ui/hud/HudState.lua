@@ -2,6 +2,7 @@
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Fusion = require(ReplicatedStorage:WaitForChild("Packages").Fusion)
+local peek = Fusion.peek
 
 local ScopeFactory = require(script.Parent.ScopeFactory)
 local PlayerDataMapper = require(script.Parent.PlayerDataMapper)
@@ -81,6 +82,43 @@ export type HudState = {
 
 local HudState = {}
 
+-- Обновить Value только если значение реально изменилось — лишний :set()
+-- триггерит пересчёт всех Fusion Computed, зависящих от этого Value.
+local function setIfDiff(valueObj: any, newVal: any, eq: ((any, any) -> boolean)?)
+    local cur = peek(valueObj)
+    local same = if eq then eq(cur, newVal) else cur == newVal
+    if not same then
+        valueObj:set(newVal)
+    end
+end
+
+local function inventoryEqual(a: { PlayerDataMapper.InventoryEntry }, b: { PlayerDataMapper.InventoryEntry }): boolean
+    if #a ~= #b then return false end
+    for i = 1, #a do
+        if a[i].oreId ~= b[i].oreId or a[i].count ~= b[i].count then
+            return false
+        end
+    end
+    return true
+end
+
+local function shallowTableEqual(a: { [string]: any }, b: { [string]: any }): boolean
+    for k, v in pairs(a) do
+        if b[k] ~= v then return false end
+    end
+    for k, _ in pairs(b) do
+        if a[k] == nil then return false end
+    end
+    return true
+end
+
+export type MiningHudDelta = {
+    coins: number?,
+    inventory: { PlayerDataMapper.InventoryEntry }?,
+    totalBlocksMined: number?,
+    totalCoinsEarned: number?,
+}
+
 function HudState.create(scope: ScopeFactory.HudScope): HudState
     return {
         scope = scope,
@@ -137,59 +175,77 @@ function HudState.sortInventory(inv: { PlayerDataMapper.InventoryEntry })
     end)
 end
 
+function HudState.applyMiningDelta(state: HudState, delta: MiningHudDelta)
+    if delta.coins ~= nil then
+        local prevCoins = peek(state.coins)
+        setIfDiff(state.coins, delta.coins)
+        if prevCoins ~= delta.coins then
+            AnimatedNumber.tween(state.coinsDisplay, delta.coins, COIN_TWEEN_SECONDS)
+        end
+    end
+    if delta.inventory then
+        local inv = delta.inventory
+        HudState.sortInventory(inv)
+        if not inventoryEqual(peek(state.inventory), inv) then
+            state.inventory:set(inv)
+        end
+    end
+    if delta.totalBlocksMined ~= nil then
+        setIfDiff(state.statBlocksMined, delta.totalBlocksMined)
+    end
+    if delta.totalCoinsEarned ~= nil then
+        local prevTotal = peek(state.statTotalCoins)
+        setIfDiff(state.statTotalCoins, delta.totalCoinsEarned)
+        if prevTotal ~= delta.totalCoinsEarned then
+            AnimatedNumber.tween(state.statTotalCoinsDisplay, delta.totalCoinsEarned, COIN_TWEEN_SECONDS)
+        end
+    end
+end
+
 function HudState.applyServerPayload(state: HudState, payload: PlayerDataMapper.ServerPlayerPayload)
     local mapped = PlayerDataMapper.fromServer(payload)
     HudState.sortInventory(mapped.inventory)
-    -- Phase 8: монеты обновляем в двух Value-объектах:
-    --   * state.coins — авторитативная цифра, мгновенно равная серверу.
-    --     По ней работают canAffordNow / canAfford в UpgradesPanel.
-    --   * state.coinsDisplay — отрендеренная (через AnimatedNumber)
-    --     плавная цифра. По ней рисуется TopBar / любой UI.
-    -- Если бы мы тянули один state.coins, то 0.4с после продажи нельзя было
-    -- бы купить апгрейд — Computed увидел бы дробное значение меньше cost.
-    state.coins:set(mapped.coins)
-    AnimatedNumber.tween(state.coinsDisplay, mapped.coins, COIN_TWEEN_SECONDS)
-    state.gems:set(mapped.gems)
-    state.inventory:set(mapped.inventory)
-    state.upgrades:set(mapped.upgrades)
-    state.statTotalCoins:set(mapped.totalCoinsEarned)
-    AnimatedNumber.tween(state.statTotalCoinsDisplay, mapped.totalCoinsEarned, COIN_TWEEN_SECONDS)
-    state.statBlocksMined:set(mapped.totalBlocksMined)
-    state.statBossesDefeated:set(mapped.bossesDefeated)
-    state.statMaxDepth:set(mapped.maxDepthReached)
-    state.tutorialStep:set(mapped.tutorialStep)
-    state.rebirths:set(mapped.rebirths)
-    state.rebirthMultiplier:set(mapped.rebirthMultiplier)
-    -- Phase 10: retention-state. Все .set() мгновенно (без tween) — daily
-    -- claim — дискретное событие, как rebirth. Count-up монет внутри
-    -- claim-анимации делается отдельно через AnimatedNumber.tween на
-    -- state.coinsDisplay.
-    state.dailyCanClaim:set(mapped.dailyState.canClaim or false)
-    state.dailyStreak:set(mapped.dailyState.currentStreak or 0)
-    state.dailyNextDay:set(mapped.dailyState.nextDay or 1)
-    state.dailySecondsUntilNext:set(mapped.dailyState.secondsUntilNextDay or 0)
-    state.dailyTotalClaimed:set(mapped.dailyState.totalDaysClaimed or 0)
-    state.activeBoosts:set(mapped.activeBoosts)
-    state.leaderboardPlacement:set(mapped.leaderboardPlacement)
-    -- Phase 11: pets. Мгновенно (без tween) — hatch/equip дискретны.
-    state.pets:set(mapped.pets)
-    state.petEffects:set(mapped.petEffects)
-    -- Phase 12: монетизация + multi-slot equip.
-    state.gamepasses:set(mapped.gamepasses)
-    state.equippedUids:set(mapped.equippedUids)
-    state.petMaxEquipped:set(mapped.petMaxEquipped)
-    -- equippedPet — первый uid для PetVisual / backward-compat; PetsPanel
-    -- читает equippedUids для multi-slot.
-    if #mapped.equippedUids > 0 then
-        state.equippedPet:set(mapped.equippedUids[1])
-    else
-        state.equippedPet:set(mapped.equippedPet)
+    -- Diffing: :set() только на изменившиеся Value — иначе каждый PlayerStats
+    -- пересчитывает весь Fusion-граф (~30 полей), даже если изменились coins.
+    local prevCoins = peek(state.coins)
+    setIfDiff(state.coins, mapped.coins)
+    if prevCoins ~= mapped.coins then
+        AnimatedNumber.tween(state.coinsDisplay, mapped.coins, COIN_TWEEN_SECONDS)
     end
-    -- Phase 13: журнал находок.
-    state.discoveredOres:set(mapped.discoveredOres)
-    state.discoveredMilestones:set(mapped.discoveredMilestones)
-    state.discoveryFound:set(mapped.discoveryProgress.found)
-    state.discoveryTotal:set(mapped.discoveryProgress.total)
+    setIfDiff(state.gems, mapped.gems)
+    if not inventoryEqual(peek(state.inventory), mapped.inventory) then
+        state.inventory:set(mapped.inventory)
+    end
+    setIfDiff(state.upgrades, mapped.upgrades, shallowTableEqual)
+    local prevStatCoins = peek(state.statTotalCoins)
+    setIfDiff(state.statTotalCoins, mapped.totalCoinsEarned)
+    if prevStatCoins ~= mapped.totalCoinsEarned then
+        AnimatedNumber.tween(state.statTotalCoinsDisplay, mapped.totalCoinsEarned, COIN_TWEEN_SECONDS)
+    end
+    setIfDiff(state.statBlocksMined, mapped.totalBlocksMined)
+    setIfDiff(state.statBossesDefeated, mapped.bossesDefeated)
+    setIfDiff(state.statMaxDepth, mapped.maxDepthReached)
+    setIfDiff(state.tutorialStep, mapped.tutorialStep)
+    setIfDiff(state.rebirths, mapped.rebirths)
+    setIfDiff(state.rebirthMultiplier, mapped.rebirthMultiplier)
+    setIfDiff(state.dailyCanClaim, mapped.dailyState.canClaim or false)
+    setIfDiff(state.dailyStreak, mapped.dailyState.currentStreak or 0)
+    setIfDiff(state.dailyNextDay, mapped.dailyState.nextDay or 1)
+    setIfDiff(state.dailySecondsUntilNext, mapped.dailyState.secondsUntilNextDay or 0)
+    setIfDiff(state.dailyTotalClaimed, mapped.dailyState.totalDaysClaimed or 0)
+    setIfDiff(state.activeBoosts, mapped.activeBoosts, shallowTableEqual)
+    setIfDiff(state.leaderboardPlacement, mapped.leaderboardPlacement, shallowTableEqual)
+    setIfDiff(state.pets, mapped.pets, shallowTableEqual)
+    setIfDiff(state.petEffects, mapped.petEffects, shallowTableEqual)
+    setIfDiff(state.gamepasses, mapped.gamepasses, shallowTableEqual)
+    setIfDiff(state.equippedUids, mapped.equippedUids, shallowTableEqual)
+    setIfDiff(state.petMaxEquipped, mapped.petMaxEquipped)
+    local newEquipped = if #mapped.equippedUids > 0 then mapped.equippedUids[1] else mapped.equippedPet
+    setIfDiff(state.equippedPet, newEquipped)
+    setIfDiff(state.discoveredOres, mapped.discoveredOres, shallowTableEqual)
+    setIfDiff(state.discoveredMilestones, mapped.discoveredMilestones, shallowTableEqual)
+    setIfDiff(state.discoveryFound, mapped.discoveryProgress.found)
+    setIfDiff(state.discoveryTotal, mapped.discoveryProgress.total)
 end
 
 function HudState.applyDepth(state: HudState, depth: number, layerId: string, layerName: string)

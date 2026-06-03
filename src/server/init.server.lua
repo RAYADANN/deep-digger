@@ -57,6 +57,10 @@ local antiCheat = AntiCheat.new()
 local remoteSync = Net:RemoteEvent("SyncBlocks")
 local remoteStats = Net:RemoteEvent("PlayerStats")
 local remoteInv = Net:RemoteEvent("PlayerInventory")
+-- Лёгкая дельта HUD при копании: только coins/inventory/stats вместо полного
+-- payload (~30 Fusion-полей ×2 события). syncPlayerHud остаётся для sell/buy/
+-- rebirth/join, где меняются upgrades/pets/discovery.
+local remoteHudDelta = Net:RemoteEvent("PlayerHudDelta")
 local remoteNotify = Net:RemoteEvent("Notify")
 
 -- Phase 9: payload.kind — опциональный «тип» нотификации. Клиент использует
@@ -251,6 +255,32 @@ local function syncPlayerHud(player: Player)
     local payload = buildHudPayload(playerData)
     remoteStats:FireClient(player, payload)
     remoteInv:FireClient(player, payload)
+end
+
+--[[
+    Горячая дельта HUD после копания. Меняются только coins, inventory и
+    счётчики stats — всё остальное (pets, gamepasses, discovery, daily…)
+    не трогаем. Клиент обновляет 4 Fusion Value вместо ~30 ×2.
+]]
+local function buildInventoryList(playerData): { { oreId: string, count: number } }
+    local invList = {}
+    for oreId, count in pairs(playerData.inventory or {}) do
+        if count > 0 then
+            table.insert(invList, { oreId = oreId, count = count })
+        end
+    end
+    return invList
+end
+
+local function syncMiningHud(player: Player)
+    local playerData = profileManager:getData(player)
+    if not playerData then return end
+    remoteHudDelta:FireClient(player, {
+        coins = playerData.coins or 0,
+        inventory = buildInventoryList(playerData),
+        totalBlocksMined = playerData.totalBlocksMined or 0,
+        totalCoinsEarned = playerData.totalCoinsEarned or 0,
+    })
 end
 
 local function processDepthUpdate(player: Player, depth: number)
@@ -487,8 +517,11 @@ Net:Handle("MineBlock", function(player: Player, clicks: { { x: number, z: numbe
     end
 
     flushDelta(player, deltaAgg)
-    if blocksChanged or discoveryChanged then
+    if discoveryChanged then
+        -- Редкое событие (новая руда) — нужны discovery-поля, шлём полный HUD.
         syncPlayerHud(player)
+    elseif blocksChanged then
+        syncMiningHud(player)
     end
 
     return results
@@ -551,6 +584,17 @@ local function onPlayerAdded(player: Player)
 
     -- 4. Полный snapshot блоков для начального состояния клиента
     sendBlocksSnapshot(player)
+
+    -- 4b. Респавн: клиентские скрипты перезагружаются (PlayerGui reset),
+    -- новый renderer пустой и ждёт snapshot. Начальный snapshot уже отправлен
+    -- выше; CharacterAdded НЕ стреляет для уже существующего персонажа при
+    -- Connect — только на респавны, поэтому firstCharacter-флаг не нужен.
+    player.CharacterAdded:Connect(function()
+        task.wait(0.5) -- дать клиенту перезагрузить скрипты и вызвать start()
+        if player.Parent then
+            sendBlocksSnapshot(player)
+        end
+    end)
 
     -- 5. Отправляем данные на HUD
     syncPlayerHud(player)

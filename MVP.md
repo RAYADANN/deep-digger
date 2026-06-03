@@ -5,7 +5,7 @@
 > **Архитектура:** 3D Neighbor Reveal (текущая). К вертикальной сетке 6×N не возвращаемся.
 > **Кто пишет код:** AI-агент в Cursor.
 > **Кто тестирует:** разработчик (Roblox Studio + Rojo).
-> **Статус:** Фазы 0–13 закрыты 🟢 (Фаза 5 ждёт плейтест-профайл; 12–13 ждут коммита). Фазы 14–15 (визуал, soft launch) — 🔴.
+> **Статус:** Фазы 0–14 закрыты 🟢 (Фаза 5 ждёт плейтест-профайл; 12–14 ждут коммита; Фаза 14 — код готов, финальные PNG-ассеты грузит разработчик). Фаза 15 (soft launch) — 🔴.
 > **Обновлено:** 2026-06-03
 
 ---
@@ -347,7 +347,7 @@
 - [x] **UI**: 8-й таб 📖 **ЖУРНАЛ** (`TabBar` ~506px), `JournalPanel` + `OreEntry` (??? до находки), заголовок «Открыто X/Y».
 - [x] **DevCommands** (Studio): `/discover <oreId>`, `/discoverall`, `/resetjournal`.
 - [x] **Клиент Notify**: `OreDiscoveryFX` (reveal «НОВАЯ НАХОДКА» + очередь), `RewardFX` на milestone; звук break/sell.
-- [x] **Визуал блоков по редкости**: материал (Slate→Neon), reflectance, PointLight-аура (rare+), sparkle-частицы, пульс legendary/mythic (`MiningRenderer`).
+- [x] **Визуал блоков по редкости**: материал (Slate→Foil), reflectance, PointLight-аура (epic+, под капом для FPS), sparkle-частицы (rare+), пульс legendary/mythic (`MiningRenderer`). Neon с блоков убран (нагрузка).
 
 **Тест:** `/discover coal` → запись в журнале + тост. Добыть новую руду в игре → тост + слот открыт. Закрыть все руды слоя Dirt → milestone-монеты + тост. Ребёрт → журнал на месте. Перезаход → тот же журнал.
 
@@ -355,19 +355,20 @@
 
 ---
 
-### █ Фаза 14 — Визуальная идентичность 🔴
+### █ Фаза 14 — Визуальная идентичность 🟢
 
-**Цель:** игра выделяется в Roblox Discover.
+**Цель:** игра выделяется в Roblox Discover и узнаётся как mining-sim; спуск вглубь ощущается атмосферой.
 
-- [ ] **Материалы по слоям** (используя задел в `OreDef.material`): Dirt → `Ground`, Stone → `Slate`, Gold → `Foil`, Diamond → `Glass` + reflectance, Obsidian → `Glass` тёмный, Mythic → `Neon`.
-- [ ] **Lighting**: тонкая настройка `Lighting.Brightness`, `ClockTime`, `Atmosphere` для каждого слоя — атмосфера «спускания вглубь».
-- [ ] **Key art** (превью игры): 3D-рендер шахты с гигантской киркой и питомцем на переднем плане. Хук, на который кликают в Discover.
-- [ ] **Icon**: 512×512, узнаваемая, читается в 64×64 (мобильные превью).
-- [ ] **Thumbnail set** (4 штуки): копание, ребёрт-эффект, открытие яйца, лидерборд.
-- [ ] **Название и описание** в Creator Hub: финальный текст с ключевыми словами «mining», «pets», «rebirth», «simulator».
-- [ ] **Genre tags** в Creator Hub: Simulator, Adventure.
+- [x] **Материалы по слоям** (заполнен `OreDef.material/reflectance/glow` в `shared/data/OreDatabase.lua`): Dirt→`Ground`, Stone→`Slate`, металлы (Copper/Iron→`Metal`, Silver/Gold→`Foil`) + reflectance, самоцветы (Sapphire/Ruby/Topaz/Emerald/Diamond→`Glass`+reflectance), Diamond reflectance 0.4, Obsidian→тёмный `Glass`, мистические (Astralite/Spirit Shard/Nebula/Star Fragment/Void Crystal)→`glow` (шиммер Foil, Neon с блоков убран ради FPS). `MiningRenderer:_createPart` читает OreDef с приоритетом над `ORE_VISUAL_BY_RARITY`. `test_glow` намеренно без полей — проверяет fallback.
+- [x] **Lighting по слоям** (`Constants.LAYER_LIGHTING` + расширенный `client/core/LayerEnvironment`): твин `Brightness`, `ClockTime`, `FogEnd` и `Atmosphere.Density/Haze/Color` — dirt (яркий полдень) → void (почти тьма). Без fullscreen post-processing (нет ColorCorrection/Bloom) — в духе Phase 7.
+- [x] **Creator Hub бриф** (`docs/marketing/CreatorHub.md`): название RU/EN, описание RU/EN с ключами mining/pets/rebirth/simulator, genre tags (Simulator + Adventure), pipeline загрузки.
+- [x] **Чеклист ассетов + placeholder-пути** (`docs/marketing/assets/`): icon 512×512 (читается в 64×64), 4 thumbnails (копание / rebirth FX / egg hatch / leaderboard), key art brief. Финальные PNG разработчик рендерит/загружает сам.
+- [ ] **Финальные PNG в Creator Hub** (вне кода): icon, 4 thumbnails, key art — загружает разработчик по `docs/marketing/CreatorHub.md` §6.
+- [ ] **icon-тест 5 людей** (плейтест): 5 случайных человек по иконке 64×64 угадывают «копание/шахта».
 
-**Тест:** показать иконку 5 случайным людям → угадывают что игра про копание/добычу.
+**Тест (Studio smoke):** Play Solo → докопать до Stone+ → проверить смену материалов руд (rare-руды отличаются от common по OreDef-материалу, не только по rarity-таблице) и переход освещения Dirt→Stone (Brightness/ClockTime/Atmosphere). Полный чеклист — в `STATUS.md` (smoke Фазы 14).
+
+**Критерий готовности:** 5 человек по иконке понимают «копание/шахта»; rare-руды визуально отличаются от common по OreDef-материалу; переход Dirt→Stone ощущается атмосферой.
 
 ---
 

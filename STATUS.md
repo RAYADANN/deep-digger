@@ -1,7 +1,7 @@
 # STATUS.md — Deep Digger 🪨
 
 > Состояние проекта, заглушки и планы.
-> Обновлено: 2026-06-03 (Фазы 12–13 закрыты — Монетизация + **Ore Discovery Index** (8-й таб 📖 ЖУРНАЛ, milestone за слой); ждут коммита)
+> Обновлено: 2026-06-03 (Фазы 12–14 закрыты — Монетизация + **Ore Discovery Index** + **Визуальная идентичность** (материалы руд по слоям, lighting «спуск вглубь», Creator Hub бриф); ждут коммита)
 > **Scope расширен:** MVP теперь launch-ready (pets, rebirth, monetization, leaderboard, daily). См. MVP.md.
 
 ---
@@ -56,10 +56,10 @@ UI:          Fusion 0.3 (scope: Value, New, Computed, OnEvent)
 |------|------------|
 | `init.client.lua` | Точка входа, рендер + HUD + PlayerStats + Notify; стартует SoundManager и CameraShake до первого CharacterAdded; **Phase 8:** запускает `Tutorial.start(tutorialStep, payload)` на каждый PlayerStats (Tutorial.start идемпотентен), `Tutorial.refresh()` после CharacterAdded, `Tutorial.destroy()` при выходе; **Phase 10:** `Net:Connect("PlayerStats")` — при `dailyState.canClaim == true` и `_autoOpenedThisSession == false` автоматически открывает `DailyRewardModal.show()` через выделенный `modalScope`; `Net:Connect("Notify")` обрабатывает `payload.kind == "daily_available"` (переоткрытие модала после полуночи) и `payload.kind == "daily_reward"` (запуск `RewardFX.burst(rarity)` ровно один раз — server-authoritative по rarity, без двойного coin-rain'a); **Phase 11:** `applyPlayerPayload` дёргает `PetVisual.setEquipped(equippedPet)` (pcall), `PetVisual.destroy()` при выходе игрока (hatch FX триггерится из PetsPanel); **Phase 12:** `payload.kind == "egg_purchase"` → `PetHatchFX.play(payload.pets)`; **Phase 13:** `ore_discovered` → `OreDiscoveryFX.play` (без дублирующего Notification) + `playForOre`; `layer_milestone` → `RewardFX.burst` + `sell_success` |
 | `ui/OreDiscoveryFX.lua` | **Phase 13:** reveal «✦ НОВАЯ НАХОДКА ✦» — аура, shockwave-кольца, pop-in иконки руды, имя/редкость, ✦-искры, очередь до 6 находок, non-blocking overlay (DisplayOrder 94), hold дольше для rare+ |
-| `core/MiningRenderer.lua` | 3D-блоки, applySnapshot/applyDelta, HP-bar, hover (Size 1.0↔1.05); **Phase 7 (mining-style juice):** dmg numbers с adaptive UIStroke + цвет руды + pop-in (Quad/Out, мягко), block-squash на ударе (замена шутерному shake), break = физические chunks (6→30 по rarity, gravity) + dust cloud (smoke_main, 8→32) + shockwave-сфера (ForceField, цвет редкости, rare+) + coin-pop (`+X 💰` всплывает из блока), crit = золотое shockwave + 6 золотых chunks (без slow-mo, без фуллскрин-flash), hooks → SoundManager / CameraShake / Haptics; **Phase 13:** `ORE_VISUAL_BY_RARITY` — материал/reflectance по редкости, `PointLight`+пульс (legendary/mythic), sparkle-частицы (rare+), переопределение из `OreDef.material/glow/reflectance` |
+| `core/MiningRenderer.lua` | 3D-блоки, applySnapshot/applyDelta, HP-bar, hover (Size 1.0↔1.05); **Phase 7 (mining-style juice):** dmg numbers с adaptive UIStroke + цвет руды + pop-in (Quad/Out, мягко), block-squash на ударе (замена шутерному shake), break = физические chunks (6→30 по rarity, gravity) + dust cloud (smoke_main, 8→32) + shockwave-сфера (ForceField, цвет редкости, rare+) + coin-pop (`+X 💰` всплывает из блока), crit = золотое shockwave + 6 золотых chunks (без slow-mo, без фуллскрин-flash), hooks → SoundManager / CameraShake / Haptics; **Phase 13:** `ORE_VISUAL_BY_RARITY` — материал/reflectance по редкости, sparkle-частицы (rare+), переопределение из `OreDef.material/glow/reflectance`; **Phase 14 (perf):** блоки `CastShadow=false`, HP-бар/rarity-плашка создаются лениво (не для каждого из ~2250 блоков), `PointLight` только epic+ с капом `MAX_RARITY_GLOWS=40`, пульс legendary/mythic |
 | `core/OreLookup.lua` | O(1) лукап `oreId → OreDef` поверх `shared/data/OreDatabase` (color/rarity/icon/name/rarityColor) |
 | `core/DepthTracker.lua` | Клиентский трекер глубины по `HumanoidRootPart.Y` |
-| `core/LayerEnvironment.lua` | Твин `Lighting.Ambient/OutdoorAmbient/FogColor` по слою |
+| `core/LayerEnvironment.lua` | Твин `Lighting.Ambient/OutdoorAmbient/FogColor` по слою; **Phase 14:** + твин `Brightness`/`ClockTime`/`FogEnd` и ленивый `Atmosphere` (Density/Haze/Color/Decay) по `Constants.LAYER_LIGHTING` — ощущение «спуска вглубь» (dirt = яркий полдень → void = почти тьма). Без fullscreen post-processing |
 | `core/SoundManager.lua` | Кэш Sound-инстансов в SoundService под `DeepDigger_Sounds`, 2 SoundGroup (sfx/ui), 3D-звуки через временный Attachment + Debris, API: `start / play / playForOre / setVolume` |
 | `core/CameraShake.lua` | Перезаписываемый offset CFrame на RenderStepped, авто-откат прошлого кадра (не накапливается). Пресеты `hit / crit / rare_break / break / legendary_break` — но из MiningRenderer вызываются только break-пресеты (на rare+), hit/crit пресеты в API «на потом» (бои в патчах) |
 | `core/Haptics.lua` | `pulse("hit"\|"crit"\|"break"\|"legendary_break")`, hit-пульс ОЧЕНЬ мягкий (0.12/0.03 — копание = 4 клика/сек), `pcall` вокруг `HapticService:SetMotor`, no-op на десктопе |
@@ -98,11 +98,11 @@ UI:          Fusion 0.3 (scope: Value, New, Computed, OnEvent)
 ### Shared
 | Файл | Что делает |
 |------|------------|
-| `constants.lua` | Слои, сетка, апгрейды, RARITY_*, SHAFT_*; **Phase 8:** `STARTER_COINS = 100` (first-time bonus), `TUTORIAL_STEPS = { NOT_STARTED=0, MINED_FIRST_BLOCK=1, SOLD_FIRST_ORE=2, COMPLETED=3 }`; **Phase 9:** `REBIRTH = { baseCost=50000, exponent=5, multiplierPerRebirth=0.1, pickaxeMaxBonusAt={5,10,25} }` (формулы в `shared/util/RebirthLogic.lua`); **Phase 10:** `DAILY = { cycleDays=7, grantBoostAtDay7=true, streakResetAfterMissedDays=2, rolloverCheckInterval=60 }` + `LEADERBOARD = { COINS_MAP="Leaderboard_Coins_v1", DEPTH_MAP="Leaderboard_Depth_v1", topSize=50, refreshIntervalSeconds=30, expirationSeconds=30 days, writeThresholdCoins=100, writeThresholdDepth=5 }`. Версионирование `_v1` — при изменении схемы старый лидерборд остаётся как archive; **Phase 11:** `PETS = { maxEquipped=1, hatchBatchMax=10, multiMineMaxChance=0.9, luckMaxMultiplier=3.0, eggs={ basic={cost=1000} }, basicEggWeights={...} }` (формулы — `shared/util/PetLogic.lua`, питомцы — `shared/data/PetDatabase.lua`); **Phase 12:** `GAMEPASSES` (vip / autoSell / petSlots) + `DEVPRODUCTS` (coinsSmall / coinsMedium / egg10), id=0 плейсхолдер до Creator Hub; **Phase 13:** `DISCOVERY.layerMilestoneCoins` (dirt 2.5k → void 25M) |
+| `constants.lua` | Слои, сетка, апгрейды, RARITY_*, SHAFT_*; **Phase 8:** `STARTER_COINS = 100` (first-time bonus), `TUTORIAL_STEPS = { NOT_STARTED=0, MINED_FIRST_BLOCK=1, SOLD_FIRST_ORE=2, COMPLETED=3 }`; **Phase 9:** `REBIRTH = { baseCost=50000, exponent=5, multiplierPerRebirth=0.1, pickaxeMaxBonusAt={5,10,25} }` (формулы в `shared/util/RebirthLogic.lua`); **Phase 10:** `DAILY = { cycleDays=7, grantBoostAtDay7=true, streakResetAfterMissedDays=2, rolloverCheckInterval=60 }` + `LEADERBOARD = { COINS_MAP="Leaderboard_Coins_v1", DEPTH_MAP="Leaderboard_Depth_v1", topSize=50, refreshIntervalSeconds=30, expirationSeconds=30 days, writeThresholdCoins=100, writeThresholdDepth=5 }`. Версионирование `_v1` — при изменении схемы старый лидерборд остаётся как archive; **Phase 11:** `PETS = { maxEquipped=1, hatchBatchMax=10, multiMineMaxChance=0.9, luckMaxMultiplier=3.0, eggs={ basic={cost=1000} }, basicEggWeights={...} }` (формулы — `shared/util/PetLogic.lua`, питомцы — `shared/data/PetDatabase.lua`); **Phase 12:** `GAMEPASSES` (vip / autoSell / petSlots) + `DEVPRODUCTS` (coinsSmall / coinsMedium / egg10), id=0 плейсхолдер до Creator Hub; **Phase 13:** `DISCOVERY.layerMilestoneCoins` (dirt 2.5k → void 25M); **Phase 14:** `LAYER_LIGHTING` — профиль освещения на слой (`brightness`/`clockTime`/`fogEnd`/`atmosphereDensity`/`atmosphereHaze`), читает `LayerEnvironment` |
 | `util/DiscoveryLogic.lua` | **Phase 13:** каталог руд по слоям из OreDatabase (без test_*), `layerProgress` / `totalProgress`, `milestoneReward`, `isDiscoverable` |
 | `util/MonetizationLogic.lua` | **Phase 12:** единственный источник формул монетизации. `ownsGamepass`, `isVip`, `coinBoost` (аддитив +10% VIP), `petSlotBonus` (+2), `gamepassById` / `productById`, `vipNameColor` |
 | `data/PetDatabase.lua` | **Phase 11:** 10 питомцев, rarity common→mythic, эффекты `damageBoost`/`luckBoost`/`coinBoost`/`multiMine`. Запись `{ id, name, rarity, icon, color, effect={kind,value} }`. Лукапы `get(petId)` (byId), `getByRarity(rarity)`, `getAll()`. Единственный источник правды по петам — читают сервер (PetManager/PetLogic) и клиент (PetsPanel/PetCard/PetVisual/PetHatchFX) |
-| `data/OreDatabase.lua` | 31 руда + `test_glow`, 7 слоёв (Dirt → Void) — единственный источник правды по рудам, читают и сервер, и клиент |
+| `data/OreDatabase.lua` | 31 руда + `test_glow`, 7 слоёв (Dirt → Void) — единственный источник правды по рудам, читают и сервер, и клиент; **Phase 14:** заполнены `material`/`reflectance`/`glow` по дизайн-гайду (Dirt→Ground, Stone→Slate, металлы→Metal/Foil, самоцветы→Glass+reflectance, мистические→glow=шиммер Foil, Neon с блоков убран ради FPS). `test_glow` намеренно без полей (проверка fallback на ORE_VISUAL_BY_RARITY) |
 | `data/SoundDatabase.lua` | Маппинг событий (hit / break / crit / sell / buy / ui_click) → `{ soundId, volume, pitchRange }`. Rarity-маппинги `RARITY_HIT` / `RARITY_BREAK`. Все ID — Roblox audio library (free), помечены `TODO playtest` |
 | `data/DailyRewardDatabase.lua` | **Phase 10:** 7-дневный цикл наград. `[1..6] = { type, amount, [duration], rarity, label }`, `[7] = { type="coins", amount=50000, rarity="mythic", bonusBoost = { multiplier=2, duration=1800 }, label="+50,000 + x2/30мин" }`. Rarity ramp: common → common → uncommon → rare → epic → legendary → mythic. Helper'ы `get(day)` (с fallback в Day 1 для невалидных) и `iconForReward(reward)` (💰 coins / ⚡ boost / 🎁 mythic). Чистый data-модуль без логики claim'а — последняя в `shared/util/DailyLogic.lua` |
 | `util/LayerUtil.lua` | depth↔layer, colorToPayload |
@@ -113,7 +113,7 @@ UI:          Fusion 0.3 (scope: Value, New, Computed, OnEvent)
 | `util/PetLogic.lua` | **Phase 11 (Pets MVP):** единственный источник формул пет-системы (как RebirthLogic/DailyLogic). `maxEquipped(data?)` — base + `MonetizationLogic.petSlotBonus` (Phase 12), `rollHatch(rng?)` (weighted random по `Constants.PETS.basicEggWeights` → равновероятно внутри пула rarity, с фолбэком вниз), `getEquippedUids(data)` (поддерживает string и list — multi-slot), `getEquippedPets(data)`, `damageMultiplier` (1+Σ damageBoost), `luckMultiplier` (clamp `luckMaxMultiplier`), `coinBoostSum` (аддитив), `multiMineChance` (clamp `multiMineMaxChance`), `summary(data)` (для HUD-payload), `effectShort`/`describeEffect`. Аккумуляция additive (как PlayerBoosts: два +20% = +40%). Запрещены дубликаты этих формул в менеджерах |
 | `util/InventoryUtil.lua` | totalCount, addOre |
 | `util/Logger.lua`, `util/Signal.lua` | Утилиты |
-| `types/OreTypes.lua` | Типы данных (`OreDef` с заделом под визуальный пас Фазы 14: `material`/`reflectance`/`atlasIndex`/`meshId`/`glow`); **Phase 8:** `PlayerData` расширен `tutorialStep: number` + `firstSession: boolean`; **Phase 9:** `PlayerData` расширен `rebirths: number` + `rebirthMultiplier: number` (денормализованный кэш); **Phase 10:** `PlayerData` расширен `dailyState: DailyState` (`{ lastClaimYday, lastClaimYear, currentStreak, totalDaysClaimed }`), `activeBoosts: { ActiveBoost }` (`{ kind, multiplier, expiresAt }`), `leaderboardPlacement: LeaderboardPlacement` (`{ coinsRank?, depthRank?, coinsValue, depthValue }`); **Phase 11:** `PlayerData` расширен `pets: { PetRecord }` (`{ uid, petId }`), `equippedPet: string?`, `petUidCounter: number`; добавлен тип `PetRecord`; **Phase 12:** `gamepasses: { [string]: boolean }`; **Phase 13:** `discoveredOres`, `discoveredMilestones` (журнал находок, переживает ребёрт) |
+| `types/OreTypes.lua` | Типы данных (`OreDef`: `material`/`reflectance`/`glow` заполнены в Фазе 14; `atlasIndex`/`meshId` — задел под texture atlas, post-MVP); **Phase 8:** `PlayerData` расширен `tutorialStep: number` + `firstSession: boolean`; **Phase 9:** `PlayerData` расширен `rebirths: number` + `rebirthMultiplier: number` (денормализованный кэш); **Phase 10:** `PlayerData` расширен `dailyState: DailyState` (`{ lastClaimYday, lastClaimYear, currentStreak, totalDaysClaimed }`), `activeBoosts: { ActiveBoost }` (`{ kind, multiplier, expiresAt }`), `leaderboardPlacement: LeaderboardPlacement` (`{ coinsRank?, depthRank?, coinsValue, depthValue }`); **Phase 11:** `PlayerData` расширен `pets: { PetRecord }` (`{ uid, petId }`), `equippedPet: string?`, `petUidCounter: number`; добавлен тип `PetRecord`; **Phase 12:** `gamepasses: { [string]: boolean }`; **Phase 13:** `discoveredOres`, `discoveredMilestones` (журнал находок, переживает ребёрт) |
 
 ---
 
@@ -150,7 +150,7 @@ UI:          Fusion 0.3 (scope: Value, New, Computed, OnEvent)
 | 11. Pets MVP (10 петов, egg, hatch FX, visual) | 🟢 |
 | 12. Монетизация (3 gamepass + 3 devproduct, Shop tab) | 🟢 |
 | 13. Ore Discovery Index (8-й таб 📖, milestone за слой) | 🟢 |
-| 14. Визуальная идентичность (материалы, key art) | 🔴 |
+| 14. Визуальная идентичность (материалы, lighting, Creator Hub бриф) | 🟢 (код готов; финальные PNG-ассеты грузит разработчик) |
 | 15. Soft launch и стабилизация | 🔴 |
 
 ---
@@ -190,8 +190,28 @@ UI:          Fusion 0.3 (scope: Value, New, Computed, OnEvent)
 - [ ] `DiscoveryManager initialized` в Output при старте сервера
 - [ ] Таб 📖 **ЖУРНАЛ** в TabBar (ширина ~506px), панель «Открыто X/Y»
 - [ ] `/discover coal` → **OreDiscoveryFX** «НОВАЯ НАХОДКА» (без дублирующего тоста), слот Coal в журнале
-- [ ] Rare+ блоки в шахте: свечение + sparkle; mythic = Neon + пульс
+- [ ] Rare+ блоки в шахте: sparkle; epic+ свечение (PointLight под капом); mythic = Foil + пульс
 - [ ] Добыть руду в игре (первая находка) → `kind=ore_discovered` + HUD sync
 - [ ] `/discoverall` → все слоты открыты; полный слой → milestone (если milestone ещё не был)
 - [ ] `/rebirth` → журнал не сброшен
 - [ ] `/resetjournal` → журнал пуст, milestone сброшен
+
+## 📊 Чек-лист smoke Фазы 14 (Studio + плейтест)
+
+**Материалы руд:**
+- [ ] Play Solo → копать поверхность: Dirt матовый (Ground), Pebble (Rock), Coal тёмный (Slate), Root деревянный (Wood).
+- [ ] `/coins 100000` + `/maxlvl` → докопать до **Stone (50м)**: Stone (Slate), Copper/Iron блестят (Metal), Silver/Gold металлический блеск (Foil), Sapphire/Ruby прозрачные искрятся (Glass+reflectance).
+- [ ] Rare-руда визуально отличается от common **по материалу OreDef**, а не только по rarity-полоске/свечению.
+- [ ] `/discoverall` или докопать глубже: мистические руды (Astralite/Spirit Shard/Nebula/Star Fragment/Void Crystal) — шиммер Foil (glow), без Neon.
+- [ ] `test_glow` (mythic, шанс на поверхности) — Foil через fallback rarity-таблицы (поля material/glow у него нет).
+
+**Lighting «спуск вглубь»:**
+- [ ] Переход **Dirt → Stone**: Brightness/ClockTime заметно темнеют, дымка (Atmosphere) сгущается — ощущение спуска.
+- [ ] Спуск Stone → глубже: каждый слой темнее предыдущего, Void почти чёрный.
+- [ ] Респавн / `/reset` → `LayerEnvironment:reset()` возвращает яркий Dirt-профиль.
+- [ ] Нет ColorCorrection/Bloom/fullscreen-эффектов (проверить Lighting в Explorer — только Atmosphere `DeepDigger_LayerAtmosphere`).
+
+**Creator Hub (вне Studio):**
+- [ ] Финальные PNG отрендерены и лежат в `docs/marketing/assets/` (icon + 4 thumbnails + key art).
+- [ ] icon-тест: 5 человек по иконке 64×64 угадывают «копание/шахта».
+- [ ] Title/Description (RU/EN) + genre tags (Simulator/Adventure) загружены в Creator Hub.

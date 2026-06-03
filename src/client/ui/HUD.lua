@@ -18,6 +18,7 @@ export type HUD = {
     _state: HudStateModule.HudState?,
     _gui: ScreenGui?,
     setPlayerData: (self: HUD, payload: PlayerDataMapper.ServerPlayerPayload) -> (),
+    applyMiningDelta: (self: HUD, delta: HudStateModule.MiningHudDelta) -> (),
     setCoins: (self: HUD, amount: number) -> (),
     setGems: (self: HUD, amount: number) -> (),
     setDepth: (self: HUD, depth: number, layerId: string?, layerName: string?) -> (),
@@ -85,6 +86,14 @@ function HUD:setPlayerData(payload: PlayerDataMapper.ServerPlayerPayload)
         return
     end
     HudStateModule.applyServerPayload(state, payload)
+end
+
+function HUD:applyMiningDelta(delta: HudStateModule.MiningHudDelta)
+    local state = self._state
+    if not state then
+        return
+    end
+    HudStateModule.applyMiningDelta(state, delta)
 end
 
 function HUD:destroy()
