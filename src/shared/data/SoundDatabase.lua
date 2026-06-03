@@ -9,10 +9,13 @@
 -- — random pitch ±0.1 при play (диапазон в `pitchRange`). Никаких ассет-фабрик
 -- на каждый клик.
 --
--- ВАЖНО: все ID — из Roblox audio library (free), официальные звуки Roblox.
--- При первом плейтесте часть может звучать неудачно — заменяй прямо здесь,
--- больше нигде эти числа не встречаются. TODO-метки помечают звуки, которые
--- стоит подобрать аккуратнее под жанр mining.
+-- ВАЖНО: звуки берём из ВСТРОЕННЫХ движковых ассетов `rbxasset://sounds/*.mp3`.
+-- Они поставляются с клиентом Roblox (см. content/sounds/), грузятся мгновенно
+-- и НЕ проходят audio-модерацию — поэтому никогда не дают «Asset type does not
+-- match requested type» (в отличие от library-ID, которые Roblox в 2024+ массово
+-- порезал). Это рабочие placeholder'ы под mining-жанр; на полишинге (Фаза 13)
+-- можно подменить на кастомные library-ассеты через Toolbox → Creator Store →
+-- Audio. Менять только здесь — больше нигде эти строки не встречаются.
 
 export type PitchRange = { min: number, max: number }
 
@@ -72,95 +75,95 @@ SoundDatabase.RARITY_HIT = {
 SoundDatabase.EVENTS = {
     -- ===== Hits (по rarity-тиру) =====
     hit_dirt = {
-        soundId = "rbxassetid://5810753638", -- TODO playtest: мягкий thud по земле
+        soundId = "rbxasset://sounds/clickfast.mp3", -- лёгкий tap по земле
         volume = 0.55,
-        pitchRange = { min = 0.9, max = 1.1 },
+        pitchRange = { min = 0.75, max = 0.95 },
     },
     hit_stone = {
-        soundId = "rbxassetid://9114958063", -- TODO playtest: удар по камню
+        soundId = "rbxasset://sounds/button.mp3", -- удар по камню
         volume = 0.6,
-        pitchRange = { min = 0.9, max = 1.1 },
+        pitchRange = { min = 0.7, max = 0.9 },
     },
     hit_metal = {
-        soundId = "rbxassetid://6987830013", -- TODO playtest: металлический clang
+        soundId = "rbxasset://sounds/collide.mp3", -- металлический clack
         volume = 0.55,
         pitchRange = { min = 0.92, max = 1.08 },
     },
     hit_gem = {
-        soundId = "rbxassetid://7340791418", -- TODO playtest: звон по кристаллу
+        soundId = "rbxasset://sounds/electronicpingshort.mp3", -- звон по кристаллу
         volume = 0.55,
-        pitchRange = { min = 0.95, max = 1.1 },
+        pitchRange = { min = 1.15, max = 1.35 },
     },
 
     -- ===== Breaks (по rarity) =====
     break_common = {
-        soundId = "rbxassetid://3168521635", -- TODO playtest: лёгкое крошение
+        soundId = "rbxasset://sounds/collide.mp3", -- лёгкое крошение
         volume = 0.55,
-        pitchRange = { min = 0.92, max = 1.08 },
+        pitchRange = { min = 0.85, max = 1.0 },
     },
     break_uncommon = {
-        soundId = "rbxassetid://3168521635", -- shares common; pitch чуть выше
+        soundId = "rbxasset://sounds/collide.mp3", -- shares common; pitch чуть выше
         volume = 0.6,
-        pitchRange = { min = 1.0, max = 1.12 },
+        pitchRange = { min = 0.95, max = 1.12 },
     },
     break_rare = {
-        soundId = "rbxassetid://7340791418", -- TODO playtest: разлёт осколков
-        volume = 0.65,
-        pitchRange = { min = 0.95, max = 1.05 },
+        soundId = "rbxasset://sounds/impact_explosion_01.mp3", -- разлёт осколков
+        volume = 0.6,
+        pitchRange = { min = 1.05, max = 1.2 },
     },
     break_epic = {
-        soundId = "rbxassetid://2920779349", -- TODO playtest: большой break с sparkle
-        volume = 0.75,
-        pitchRange = { min = 0.92, max = 1.0 },
+        soundId = "rbxasset://sounds/impact_explosion_02.mp3", -- большой break
+        volume = 0.65,
+        pitchRange = { min = 0.95, max = 1.1 },
     },
     break_legendary = {
-        soundId = "rbxassetid://5174488001", -- TODO playtest: эпичный boom
-        volume = 0.85,
-        pitchRange = { min = 0.88, max = 0.98 },
+        soundId = "rbxasset://sounds/impact_explosion_03.mp3", -- эпичный boom
+        volume = 0.7,
+        pitchRange = { min = 0.85, max = 1.0 },
     },
     break_mythic = {
-        soundId = "rbxassetid://9112854440", -- TODO playtest: мистический взрыв
+        soundId = "rbxassetid://9112854440", -- TODO playtest: мистический взрыв (рабочий library-ID)
         volume = 1.0,
         pitchRange = { min = 0.82, max = 0.92 },
     },
 
     -- ===== Spec events =====
     crit = {
-        soundId = "rbxassetid://9112999517", -- TODO playtest: золотой chime
+        soundId = "rbxasset://sounds/electronicpingshort.mp3", -- золотой chime
         volume = 0.8,
-        pitchRange = { min = 0.98, max = 1.05 },
+        pitchRange = { min = 1.25, max = 1.4 },
     },
     coin_pickup = {
-        soundId = "rbxassetid://4612379032", -- TODO playtest: монетка
-        volume = 0.6,
-        pitchRange = { min = 0.95, max = 1.1 },
+        soundId = "rbxasset://sounds/electronicpingshort.mp3", -- монетка
+        volume = 0.5,
+        pitchRange = { min = 1.4, max = 1.6 },
     },
 
     -- ===== UI =====
     sell_success = {
-        soundId = "rbxassetid://5097964656", -- TODO playtest: cash register
+        soundId = "rbxasset://sounds/electronicpingshort.mp3", -- касса/успех
         volume = 0.7,
-        pitchRange = { min = 1.0, max = 1.05 },
+        pitchRange = { min = 1.0, max = 1.1 },
     },
     sell_fail = {
-        soundId = "rbxassetid://550209561", -- TODO playtest: мягкая ошибка
+        soundId = "rbxassetid://550209561", -- TODO playtest: мягкая ошибка (рабочий library-ID)
         volume = 0.5,
         pitchRange = { min = 0.95, max = 1.0 },
     },
     buy_upgrade = {
-        soundId = "rbxassetid://9114157950", -- TODO playtest: апгрейд up
+        soundId = "rbxasset://sounds/button.mp3", -- апгрейд up
         volume = 0.7,
-        pitchRange = { min = 1.0, max = 1.08 },
+        pitchRange = { min = 1.1, max = 1.25 },
     },
     buy_fail = {
-        soundId = "rbxassetid://550209561",
+        soundId = "rbxassetid://550209561", -- рабочий library-ID, шарится с sell_fail
         volume = 0.5,
         pitchRange = { min = 0.95, max = 1.0 },
     },
     ui_click = {
-        soundId = "rbxassetid://9119714799", -- TODO playtest: лёгкий click
+        soundId = "rbxasset://sounds/clickfast.mp3", -- лёгкий click
         volume = 0.4,
-        pitchRange = { min = 0.95, max = 1.05 },
+        pitchRange = { min = 1.0, max = 1.15 },
     },
 }
 

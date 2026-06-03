@@ -1,7 +1,7 @@
 # STATUS.md — Deep Digger 🪨
 
 > Состояние проекта, заглушки и планы.
-> Обновлено: 2026-06-02 (Фаза 10 закрыта — Daily Reward + Global Leaderboard через MemoryStoreSortedMap)
+> Обновлено: 2026-06-03 (Фаза 10 закрыта и закоммичена — Daily Reward + Global Leaderboard через MemoryStoreSortedMap; коммит `db169bc`)
 > **Scope расширен:** MVP теперь launch-ready (pets, rebirth, monetization, leaderboard, daily). См. MVP.md.
 
 ---
@@ -77,6 +77,10 @@ UI:          Fusion 0.3 (scope: Value, New, Computed, OnEvent)
 | `ui/hud/components/AnimatedNumber.lua` | **Phase 8:** `tween(state, target, dur)` плавно меняет Fusion.Value<number> через Heartbeat + Quad/Out (дефолт 0.3с). `snap` / `cancel`. Используется для `coinsDisplay` и `statTotalCoinsDisplay` в HudState |
 | `ui/hud/components/RebirthConfirmModal.lua` | **Phase 9:** модальное окно подтверждения ребёрта. Затемнение фона (ScreenGui `DeepDigger_RebirthModal`, DisplayOrder=95), центрированный фрейм 420×280 с золотым stroke. Кнопка [РЕБЁРТ] disabled первые **0.3с** (anti-misclick задержка) — игрок не может «слепо» прокликать. ESC / клик по backdrop / [ОТМЕНА] закрывают без действия; Modal Frame `Active=true` чтобы клик по голому телу не проваливался на backdrop. Fade-in 0.18с, fade-out 0.12с |
 | `ui/hud/panels/RebirthPanel.lua` | **Phase 9:** содержимое 4-го таба HUD. Заголовок «Ребёрты: N / Множитель: x1.X», крупная кнопка REBIRTH (цена через `RebirthLogic.cost(rebirths)`, золотая при `canAfford`, иначе disabled с текстом «Не хватает X 💰»), описание «✓ сохранится / ✗ сбросится / ⛏ следующий бонус кирки». На Activated → RebirthConfirmModal, по подтверждению → `Net:Invoke("Rebirth")`. SoundManager.play на ошибках, Notification.show при отказе сервера |
+| `ui/hud/theme.lua`, `ui/hud/ScopeFactory.lua`, `ui/hud/UpgradeMeta.lua`, `ui/hud/formatters.lua` | Внутренняя HUD-инфраструктура: палитра / стили (Phase 1), фабрика Fusion-scope'ов (Phase 1), статичные мета-данные апгрейдов для UI, форматтеры чисел (`shortNumber`, `formatCoins`). Стабильны со времён Фазы 1–6, новые табы Phase 9/10 их переиспользуют |
+| `ui/hud/panels/{InventoryPanel,UpgradesPanel,StatsPanel,MainPanel,TabBar,TopBar}.lua` | Базовые HUD-панели (Phase 1–6). **Phase 9–10:** `TabBar` расширен до 5 табов (320×56), `TopBar` подсаживает `BoostChip` + `StreakChip`, `StatsPanel` дописывает строки streak + leaderboard ranks, `MainPanel` маршрутизирует на `RebirthPanel` / `LeaderboardPanel`. Без переписывания базы — только аддитивные правки |
+| `ui/hud/components/{InvSlot,SellButton,TabBtn,UpgRow,ResourceChip,DepthBar,StatRow}.lua` | Атомарные HUD-виджеты (Phase 1–6). Без существенных правок в Phase 9–10 (кроме иконки в `TabBtn` для leaderboard / rebirth и tooltip-инжекта в `UpgRow` через `Tooltip.attach` из Phase 8) |
+| `ui/HUD.lua` | Корневой фасад HUD (Phase 1). Создаёт ScreenGui, скоп Fusion, маунтит TopBar / TabBar / MainPanel. `destroy()` при выходе игрока. Не переписывался с Phase 6 |
 
 ### Shared
 | Файл | Что делает |
@@ -169,5 +173,7 @@ UI:          Fusion 0.3 (scope: Value, New, Computed, OnEvent)
 ---
 
 ## 📊 Git
-- `main`
+- Ветка: `main` (синхронизирована с `origin/main`)
+- Последний коммит: `db169bc` — «Complete MVP phases 6-10: ore data, juice, tutorial, rebirth, daily, leaderboard» (2026-06-03)
 - GitHub: `github.com/RAYADANN/deep-digger`
+- Объём `src/`: **11.8k строк / 74 .lua файла** (после Фазы 10)

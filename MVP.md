@@ -6,7 +6,7 @@
 > **Кто пишет код:** AI-агент в Cursor.
 > **Кто тестирует:** разработчик (Roblox Studio + Rojo).
 > **Статус:** Фазы 0–10 закрыты 🟢 (Фаза 5 ждёт плейтест-профайл), Фаза 11 (Pets MVP) — 🔴 на очереди.
-> **Обновлено:** 2026-06-02
+> **Обновлено:** 2026-06-03
 
 ---
 
@@ -75,7 +75,7 @@
 | 4 | 4 → 5 | ✅ Сделано: переход слоёв, дельта-синк блоков |
 | 5 | 6 → 7 | ✅ Единый источник руд (Фаза 6); ✅ **game feel pass** — звуки, screen shake, juicy dmg numbers, rarity-ramp break, slow-mo crit, mobile haptics |
 | 6 | 8 → 9 | ✅ Туториал + Error UX + tooltip + count-up (Фаза 8); ✅ **Rebirth/Prestige** loop (Фаза 9) |
-| 7 | 10 | Daily reward, глобальный leaderboard (MemoryStore) |
+| 7 | 10 | ✅ **Daily reward** (7-day cycle, streak, x2 boost'ы) + **глобальный leaderboard** (MemoryStoreSortedMap, top-50 coins/depth, avatar thumbnails) |
 | 8–9 | 11 | **Pets MVP**: 5–10 питомцев, egg-система, equip slot, эффекты |
 | 10 | 12 | Монетизация: 3–4 game-passes, 2–3 DevProducts (coin packs) |
 | 11 | 13 | Визуальный пасс: материалы по слоям, key art, иконка, thumbnail |
@@ -379,7 +379,7 @@
 
 ## Примечания
 
-- Сейчас в `src/` ~2500 строк; ожидаемый объём к концу MVP — **~8000–12000 строк** (pets, rebirth, monetization, leaderboard, daily — все добавляют ~1000-1500 строк каждый).
+- Сейчас в `src/` ~11.8k строк в 74 файлах (после Фазы 10); ожидаемый объём к концу MVP — **~15–18k строк** (Pets MVP добавит ~1500–2000, Monetization ~800–1200, визуальный пасс ~500).
 - AI-агент пишет код фазами; разработчик — Studio, Rojo, плейтест, фидбек по чеклисту фазы.
 - Баланс настраиваем после первого 30-минутного прогона по чек-листу «MVP готов».
 - Звуки на MVP — бесплатная библиотека Roblox; кастомные ассеты — post-MVP.

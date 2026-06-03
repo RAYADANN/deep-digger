@@ -118,7 +118,6 @@ function DailyRewardModal.show(opts: Options): Handle?
 
     local escConn: RBXScriptConnection? = nil
     local backdrop: Frame
-    local currentCardStroke: UIStroke? = nil
     local stopPulse: (() -> ())? = nil
 
     local function doClose()
@@ -179,40 +178,19 @@ function DailyRewardModal.show(opts: Options): Handle?
     local modalW = gridW + padding * 2
     local modalH = headerH + gridH + footerH + padding * 2 + 12
 
-    local cardElements: { any } = {}
-    for day = 1, 7 do
-        local state = stateForDay(day)
-        local card = DailyCard.create(s, { cycleDay = day, state = state, layoutOrder = day })
-        if state == "current" then
-            -- Найти UIStroke внутри карточки для pulse'a. DailyCard кладёт
-            -- его прямо как child — берём первого UIStroke.
-            local foundStroke
-            for _, ch in ipairs(card:GetDescendants()) do
-                if ch:IsA("UIStroke") then
-                    foundStroke = ch
-                    break
-                end
-            end
-            currentCardStroke = foundStroke
-            if foundStroke then
-                stopPulse = DailyCard.startPulse(foundStroke)
-            end
+    -- Карточки собираем через s:Computed ВНУТРИ Grid (как InvSlot в
+    -- InventoryPanel). Прежний вариант — create() в цикле до backdrop —
+    -- в Fusion 0.3 инстансы не попадали в дерево и сетка была пустой.
+    local function buildGridCards()
+        local cards: { any } = {}
+        for day = 1, 7 do
+            table.insert(cards, DailyCard.create(s, {
+                cycleDay = day,
+                state = stateForDay(day),
+                layoutOrder = day,
+            }))
         end
-        table.insert(cardElements, card)
-    end
-
-    -- Собираем children grid'а: UIGridLayout первый + 7 cards.
-    local gridChildren: { any } = {
-        s:New("UIGridLayout")({
-            CellSize = UDim2.fromOffset(cardW, cardH),
-            CellPadding = UDim2.fromOffset(gap, gap),
-            StartCorner = Enum.StartCorner.TopLeft,
-            FillDirectionMaxCells = cols,
-            SortOrder = Enum.SortOrder.LayoutOrder,
-        }),
-    }
-    for _, card in ipairs(cardElements) do
-        table.insert(gridChildren, card)
+        return cards
     end
 
     backdrop = s:New("Frame")({
@@ -255,6 +233,7 @@ function DailyRewardModal.show(opts: Options): Handle?
                         Font = Enum.Font.GothamBlack,
                         TextColor3 = C.gold,
                         TextXAlignment = Enum.TextXAlignment.Left,
+                        ZIndex = 5,
                     }),
                     s:New("TextLabel")({
                         Size = UDim2.new(1, -padding * 2, 0, 18),
@@ -265,6 +244,7 @@ function DailyRewardModal.show(opts: Options): Handle?
                         Font = Enum.Font.GothamBold,
                         TextColor3 = C.textLabel,
                         TextXAlignment = Enum.TextXAlignment.Left,
+                        ZIndex = 5,
                     }),
                     -- Grid с карточками
                     s:New("Frame")({
@@ -272,13 +252,25 @@ function DailyRewardModal.show(opts: Options): Handle?
                         Size = UDim2.fromOffset(gridW, gridH),
                         Position = UDim2.new(0.5, -gridW / 2, 0, padding + headerH),
                         BackgroundTransparency = 1,
-                        [Children] = gridChildren,
+                        ZIndex = 2,
+                        [Children] = {
+                            s:New("UIGridLayout")({
+                                CellSize = UDim2.fromOffset(cardW, cardH),
+                                CellPadding = UDim2.fromOffset(gap, gap),
+                                FillDirection = Enum.FillDirection.Horizontal,
+                                StartCorner = Enum.StartCorner.TopLeft,
+                                FillDirectionMaxCells = cols,
+                                SortOrder = Enum.SortOrder.LayoutOrder,
+                            }),
+                            s:Computed(buildGridCards),
+                        },
                     }),
                     -- Footer: [ПОЗЖЕ] + [ЗАБРАТЬ]
                     s:New("TextButton")({
                         Name = "LaterButton",
                         Size = UDim2.new(0, 120, 0, 44),
                         Position = UDim2.new(0, padding, 1, -padding - 44),
+                        ZIndex = 5,
                         BackgroundColor3 = s:Computed(function(use)
                             return use(hoveredLater) and C.btnHover or C.btnBg
                         end),
@@ -300,6 +292,7 @@ function DailyRewardModal.show(opts: Options): Handle?
                         Name = "ClaimButton",
                         Size = UDim2.new(0, 240, 0, 44),
                         Position = UDim2.new(1, -padding - 240, 1, -padding - 44),
+                        ZIndex = 5,
                         BackgroundColor3 = s:Computed(function(use)
                             if not use(enabled) then return C.btnDisabled end
                             return use(hoveredClaim) and Color3.fromRGB(220, 180, 30) or C.gold
@@ -379,6 +372,23 @@ function DailyRewardModal.show(opts: Options): Handle?
     TweenService:Create(backdrop, TweenInfo.new(FADE_IN, Enum.EasingStyle.Quad), {
         BackgroundTransparency = 0.4,
     }):Play()
+
+    -- Pulse на текущей карточке — только после того как Fusion
+    -- смонтировал дерево (нельзя GetDescendants на «сыром» s:New).
+    task.defer(function()
+        if handle._closed or not backdrop.Parent then
+            return
+        end
+        local modal = backdrop:FindFirstChild("Modal")
+        local grid = modal and modal:FindFirstChild("Grid")
+        local card = grid and grid:FindFirstChild("DailyCard_" .. tostring(nextDay))
+        if card then
+            local stroke = card:FindFirstChildOfClass("UIStroke")
+            if stroke and stroke:IsA("UIStroke") then
+                stopPulse = DailyCard.startPulse(stroke)
+            end
+        end
+    end)
 
     -- Anti-misclick: 0.4с задержка перед [ЗАБРАТЬ].
     task.delay(ANTI_MISCLICK_DELAY, function()

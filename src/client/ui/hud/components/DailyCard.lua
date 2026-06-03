@@ -75,9 +75,10 @@ function DailyCard.create(s: ScopeFactory.HudScope, props: Props)
         Name = "DailyCard_" .. tostring(props.cycleDay),
         Size = UDim2.fromOffset(100, 140),
         BackgroundColor3 = cardBg,
-        BackgroundTransparency = if stateName == "future" then 0.3 else 0.1,
+        BackgroundTransparency = if stateName == "future" then 0.35 else 0,
         BorderSizePixel = 0,
         LayoutOrder = props.layoutOrder or props.cycleDay,
+        ZIndex = 4,
         [Children] = {
             s:New("UICorner")({ CornerRadius = UDim.new(0, 8) }),
             stroke,
@@ -90,6 +91,7 @@ function DailyCard.create(s: ScopeFactory.HudScope, props: Props)
                 TextSize = 12,
                 Font = Enum.Font.GothamBold,
                 TextColor3 = if stateName == "current" then C.gold else C.textLabel,
+                ZIndex = 2,
             }),
             -- ✓ для past дней (поверх иконки)
             s:New("TextLabel")({
@@ -101,6 +103,7 @@ function DailyCard.create(s: ScopeFactory.HudScope, props: Props)
                 Font = Enum.Font.GothamBlack,
                 TextColor3 = Color3.fromRGB(140, 255, 140),
                 Visible = stateName == "past",
+                ZIndex = 3,
             }),
             -- Иконка типа награды
             s:New("TextLabel")({
@@ -112,6 +115,7 @@ function DailyCard.create(s: ScopeFactory.HudScope, props: Props)
                 Font = Enum.Font.GothamBold,
                 TextColor3 = if stateName == "future" then C.textMuted else C.gold,
                 Visible = stateName ~= "past",
+                ZIndex = 2,
             }),
             -- Текст награды
             s:New("TextLabel")({
@@ -125,6 +129,7 @@ function DailyCard.create(s: ScopeFactory.HudScope, props: Props)
                 TextWrapped = true,
                 TextXAlignment = Enum.TextXAlignment.Center,
                 TextYAlignment = Enum.TextYAlignment.Center,
+                ZIndex = 2,
             }),
         },
     })
