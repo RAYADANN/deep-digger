@@ -23,9 +23,8 @@ function TopBar.create(s: ScopeFactory.HudScope, state: HudStateModule.HudState)
     end)
 
     return s:New("Frame")({
-        -- Phase 10: расширили высоту с 118 → 150 чтобы вместить BoostChip
-        -- + StreakChip снизу (Visible-only, но Layout рассчитывается всегда).
-        Size = UDim2.new(0, 240, 0, 150),
+        -- Phase 10/12: высота под BoostChip + StreakChip + VIP-chip.
+        Size = UDim2.new(0, 240, 0, 168),
         Position = UDim2.new(0, 8, 0, 36),
         BackgroundTransparency = 1,
         [Children] = {
@@ -99,6 +98,34 @@ function TopBar.create(s: ScopeFactory.HudScope, state: HudStateModule.HudState)
             -- Phase 10: StreakChip — Visible при streak >= 2 (новичок не видит).
             --   x=116: правее BoostChip (108 + 8 gap).
             StreakChip.create(s, state, UDim2.new(0, 116, 0, 112)),
+            -- Phase 12: VIP-chip. Visible при владении геймпассом vip.
+            s:New("Frame")({
+                Name = "VipChip",
+                Size = UDim2.new(0, 56, 0, 22),
+                Position = UDim2.new(0, 0, 0, 136),
+                BackgroundColor3 = C.goldBg,
+                BackgroundTransparency = 0.1,
+                BorderSizePixel = 0,
+                Visible = s:Computed(function(use)
+                    local gp = use(state.gamepasses) or {}
+                    return gp.vip == true
+                end),
+                [Children] = {
+                    s:New("UICorner")({ CornerRadius = UDim.new(0, 5) }),
+                    s:New("UIStroke")({ Color = C.gold, Thickness = 1, Transparency = 0.4 }),
+                    s:New("TextLabel")({
+                        Size = UDim2.new(1, -8, 1, 0),
+                        Position = UDim2.new(0, 4, 0, 0),
+                        BackgroundTransparency = 1,
+                        Text = "👑 VIP",
+                        TextSize = 12,
+                        Font = Enum.Font.GothamBold,
+                        TextColor3 = C.gold,
+                        TextXAlignment = Enum.TextXAlignment.Left,
+                        ZIndex = 2,
+                    }),
+                },
+            }),
             SellButton.create(s),
         },
     })

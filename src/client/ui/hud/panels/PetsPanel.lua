@@ -37,6 +37,15 @@ local C = theme.C
 
 local PetsPanel = {}
 
+local function isEquippedUid(uid: string, equippedUids: { string }): boolean
+    for _, u in ipairs(equippedUids) do
+        if u == uid then
+            return true
+        end
+    end
+    return false
+end
+
 local EGG = (Constants.PETS or {}).eggs and Constants.PETS.eggs.basic or { name = "Basic Egg", icon = "🥚", cost = 1000 }
 local HATCH_MAX = (Constants.PETS or {}).hatchBatchMax or 10
 
@@ -294,7 +303,9 @@ function PetsPanel.create(s: ScopeFactory.HudScope, state: HudStateModule.HudSta
                 BackgroundTransparency = 1,
                 Text = s:Computed(function(use)
                     local pets = use(state.pets) or {}
-                    return ("Мои питомцы: %d"):format(#pets)
+                    local eq = #(use(state.equippedUids) or {})
+                    local maxN = use(state.petMaxEquipped) or 1
+                    return ("Мои питомцы: %d  ·  слотов %d/%d"):format(#pets, eq, maxN)
                 end),
                 TextSize = 13,
                 Font = Enum.Font.GothamBold,
@@ -318,12 +329,12 @@ function PetsPanel.create(s: ScopeFactory.HudScope, state: HudStateModule.HudSta
                     s:Computed(function(use)
                         local cards = {}
                         local pets = use(state.pets) or {}
-                        local equipped = use(state.equippedPet)
+                        local equippedUids = use(state.equippedUids) or {}
                         for i, rec in ipairs(pets) do
                             cards[#cards + 1] = PetCard.create(s, {
                                 uid = rec.uid,
                                 petId = rec.petId,
-                                equipped = rec.uid == equipped,
+                                equipped = isEquippedUid(rec.uid, equippedUids),
                                 layoutOrder = i,
                                 onToggle = onTogglePet,
                             })

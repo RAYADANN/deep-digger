@@ -24,6 +24,9 @@ local DailyReward = require(script.core.DailyReward)
 local PlayerBoosts = require(script.core.PlayerBoosts)
 local PetManager = require(script.core.PetManager)
 local PetLogic = require(shared.util.PetLogic)
+local MonetizationManager = require(script.core.MonetizationManager)
+local DiscoveryManager = require(script.core.DiscoveryManager)
+local DiscoveryLogic = require(shared.util.DiscoveryLogic)
 
 local log = Logger.new("Server:Init")
 
@@ -225,6 +228,18 @@ local function buildHudPayload(playerData)
         pets = playerData.pets or {},
         equippedPet = playerData.equippedPet,
         petEffects = PetLogic.summary(playerData),
+        -- Phase 12: монетизация. gamepasses — кэш владения по key (ShopPanel,
+        -- TopBar VIP-chip, SellInventory VIP-boost через MonetizationLogic).
+        -- equippedUids — нормализованный список uid'ов (multi-slot после
+        -- gamepass «+2 pet slots»); PetsPanel использует для equip-check.
+        gamepasses = playerData.gamepasses or {},
+        equippedUids = PetLogic.getEquippedUids(playerData),
+        petMaxEquipped = PetLogic.maxEquipped(playerData),
+        -- Phase 13: журнал находок (кор-механика retention). Клиент резолвит
+        -- имена/иконки через OreLookup + DiscoveryLogic.getLayers().
+        discoveredOres = playerData.discoveredOres or {},
+        discoveredMilestones = playerData.discoveredMilestones or {},
+        discoveryProgress = DiscoveryLogic.totalProgress(playerData),
     }
 end
 
@@ -338,6 +353,22 @@ local petManager = PetManager.new({
     notify = notify,
 })
 
+-- Phase 12: монетизация. PetManager нужен для девпродукта «Egg 10x».
+local monetizationManager = MonetizationManager.new({
+    profileManager = profileManager,
+    onProfileChanged = onEconomyChanged,
+    notify = notify,
+    petManager = petManager,
+})
+
+-- Phase 13: журнал находок. onProfileChanged = onEconomyChanged — milestone
+-- за полный слой начисляет монеты.
+local discoveryManager = DiscoveryManager.new({
+    profileManager = profileManager,
+    onProfileChanged = onEconomyChanged,
+    notify = notify,
+})
+
 DevCommands.new({
     profileManager = profileManager,
     onEconomyChanged = syncPlayerHud,
@@ -347,6 +378,8 @@ DevCommands.new({
     dailyReward = dailyReward,
     leaderboard = leaderboard,
     petManager = petManager,
+    monetizationManager = monetizationManager,
+    discoveryManager = discoveryManager,
 })
 
 --[[
@@ -369,6 +402,7 @@ Net:Handle("MineBlock", function(player: Player, clicks: { { x: number, z: numbe
 
     local results = {}
     local blocksChanged = false
+    local discoveryChanged = false
     local deltaAgg = newDeltaAgg()
 
     for _, click in ipairs(clicks) do
@@ -386,6 +420,10 @@ Net:Handle("MineBlock", function(player: Player, clicks: { { x: number, z: numbe
             result.inventoryFull = loot.rejected > 0
             if loot.added > 0 then
                 playerData.totalBlocksMined += 1
+                -- Phase 13: первая добыча руды → журнал находок.
+                if discoveryManager:recordDiscovery(player, result.oreDef.id) then
+                    discoveryChanged = true
+                end
             end
             -- Phase 11 (multiMine): дополнительные блоки, сломанные петом.
             -- Каждый кладём в инвентарь тем же путём (capacity + autoSell).
@@ -394,6 +432,9 @@ Net:Handle("MineBlock", function(player: Player, clicks: { { x: number, z: numbe
                     local bonusLoot = MiningLoot.tryAddOre(oreDb, playerData, bonusDef.id, 1, false)
                     if bonusLoot.added > 0 then
                         playerData.totalBlocksMined += 1
+                        if discoveryManager:recordDiscovery(player, bonusDef.id) then
+                            discoveryChanged = true
+                        end
                     end
                     if bonusLoot.autoSold then
                         result.autoSold = true
@@ -446,7 +487,7 @@ Net:Handle("MineBlock", function(player: Player, clicks: { { x: number, z: numbe
     end
 
     flushDelta(player, deltaAgg)
-    if blocksChanged then
+    if blocksChanged or discoveryChanged then
         syncPlayerHud(player)
     end
 
@@ -499,6 +540,14 @@ local function onPlayerAdded(player: Player)
     -- 3e. Phase 11: гарантируем поля петов и чиним «висячий» equippedPet
     --   (uid удалённого пета). Идемпотентно.
     petManager:onProfileLoaded(player)
+
+    -- 3f. Phase 12: синк gamepasses из MarketplaceService (source of truth) +
+    --   применение эффектов (autoSell, VIP-тег). Yield'ит в task.spawn —
+    --   не блокирует snapshot/HUD; _sync придёт когда проверка завершится.
+    monetizationManager:onProfileLoaded(player)
+
+    -- 3g. Phase 13: ensure журнал находок + бэкфилл из инвентаря (миграция).
+    discoveryManager:onProfileLoaded(player)
 
     -- 4. Полный snapshot блоков для начального состояния клиента
     sendBlocksSnapshot(player)

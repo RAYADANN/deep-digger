@@ -117,6 +117,8 @@ function RebirthManager:_applyRebirth(player: Player, data: OreTypes.PlayerData)
     data.rebirthMultiplier = RebirthLogic.valueMultiplier(newRebirths)
 
     -- tutorialStep / firstSession НЕ трогаем — см. шапку.
+    -- discoveredOres / discoveredMilestones НЕ трогаем (Phase 13 журнал
+    -- находок переживает prestige — это коллекция-история, не сброс прогресса).
 
     self._log:info(
         "Rebirth applied for", player.UserId,

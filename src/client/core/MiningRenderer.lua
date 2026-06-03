@@ -78,6 +78,37 @@ local function shortNumber(n: number): string
     else return tostring(n) end
 end
 
+-- ===== Rarity-driven block identity (visual telegraph) =====
+-- Каждый блок «читается» по редкости ещё ДО клика: материал, блеск, свечение
+-- и частицы намекают «тут что-то ценное». Перформанс: PointLight / частицы
+-- создаются ТОЛЬКО для rare+ (их единицы среди тысяч common-блоков), поэтому
+-- 2250 common-блоков остаются дешёвыми (SmoothPlastic без света).
+--
+-- Поля:
+--   material     — Enum.Material блока (Neon = самосвечение для mythic).
+--   reflectance  — 0..1 блеск (Gold/Diamond «искрятся» под Lighting).
+--   light        — nil или { range, brightness } для PointLight-ауры.
+--   pulse        — true → лёгкая пульсация яркости света (legendary/mythic).
+--   sparkleRate  — 0 = нет частиц; иначе базовый Rate sparkle-эмиттера.
+type RarityVisual = {
+    material: Enum.Material,
+    reflectance: number,
+    light: { range: number, brightness: number }?,
+    pulse: boolean,
+    sparkleRate: number,
+}
+
+local ORE_VISUAL_BY_RARITY: { [string]: RarityVisual } = {
+    common = { material = Enum.Material.Slate, reflectance = 0.0, light = nil, pulse = false, sparkleRate = 0 },
+    uncommon = { material = Enum.Material.Rock, reflectance = 0.04, light = nil, pulse = false, sparkleRate = 0 },
+    rare = { material = Enum.Material.Marble, reflectance = 0.16, light = { range = 6, brightness = 0.7 }, pulse = false, sparkleRate = 1.5 },
+    epic = { material = Enum.Material.Glass, reflectance = 0.28, light = { range = 8, brightness = 1.1 }, pulse = false, sparkleRate = 3 },
+    legendary = { material = Enum.Material.Foil, reflectance = 0.4, light = { range = 10, brightness = 1.7 }, pulse = true, sparkleRate = 5 },
+    mythic = { material = Enum.Material.Neon, reflectance = 0.0, light = { range = 13, brightness = 2.4 }, pulse = true, sparkleRate = 9 },
+}
+
+local DEFAULT_VISUAL: RarityVisual = ORE_VISUAL_BY_RARITY.common
+
 -- Shockwave: расширяющаяся neon-сфера. Это "ударная волна" в точке разрушения.
 -- Полностью локальный эффект — никаких ScreenGui, никаких CC-эффектов.
 local function shockwave(parent: Instance, position: Vector3, color: Color3, finalSize: number, duration: number)
@@ -327,8 +358,22 @@ function MiningRenderer:_createPart(x, z, y, oreId, hp, maxHp)
     local part = Instance.new("Part")
     part.Name = key; part.Size = BSv; part.Anchored = true
     part.CanCollide = true; part.CanTouch = false; part.CastShadow = true
-    part.Material = Enum.Material.SmoothPlastic; part.Reflectance = 0.05
     part.BrickColor = BrickColor.new(OreLookup.getColor(oreId))
+
+    -- Rarity-телеграф материала/блеска (см. ORE_VISUAL_BY_RARITY). OreDef.material
+    -- / glow / reflectance (задел Фазы 14) переопределяют дефолт по редкости.
+    local rarity = OreLookup.getRarity(oreId)
+    local visual = ORE_VISUAL_BY_RARITY[rarity] or DEFAULT_VISUAL
+    local def = OreLookup.getDef(oreId)
+    local mat = visual.material
+    local refl = visual.reflectance
+    if def then
+        if def.glow then mat = Enum.Material.Neon end
+        if def.material then mat = def.material end
+        if def.reflectance ~= nil then refl = def.reflectance end
+    end
+    part.Material = mat
+    part.Reflectance = refl
     part.Parent = self._parent
     local px = x * BS; local pz = z * BS + 30
     local py = -(y * BS + BS / 2)
@@ -378,7 +423,7 @@ function MiningRenderer:_createPart(x, z, y, oreId, hp, maxHp)
         end
     end)
 
-    local rar = OreLookup.getRarity(oreId)
+    local rar = rarity
     local rarColor = OreLookup.getRarityColor(oreId)
     local tag = Instance.new("BillboardGui"); tag.Size = UDim2.fromOffset(50, 6)
     tag.StudsOffset = Vector3.new(0, 3.2, 0); tag.AlwaysOnTop = true
@@ -387,14 +432,46 @@ function MiningRenderer:_createPart(x, z, y, oreId, hp, maxHp)
     bar.BackgroundColor3 = rarColor; bar.BorderSizePixel = 0; bar.BackgroundTransparency = 0.1
     Instance.new("UICorner", bar).CornerRadius = UDim.new(0, 3); bar.Parent = tag; tag.Parent = part
 
-    if rar == "epic" or rar == "legendary" or rar == "mythic" then
+    -- Аура свечения rare+: PointLight цвета редкости. legendary/mythic — пульс.
+    -- Создаётся ТОЛЬКО для редких руд (их единицы), common-блоки без света.
+    if visual.light then
+        local glow = Instance.new("PointLight")
+        glow.Name = "RarityGlow"
+        glow.Color = rarColor
+        glow.Range = visual.light.range
+        glow.Brightness = visual.light.brightness
+        glow.Shadows = false
+        glow.Parent = part
+        if visual.pulse then
+            local pulseTween = TweenService:Create(
+                glow,
+                TweenInfo.new(0.9, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
+                { Brightness = visual.light.brightness * 0.45 }
+            )
+            pulseTween:Play()
+        end
+    end
+
+    -- Sparkle-частицы цвета редкости (rare+). Размер/частота растут с rarity.
+    if visual.sparkleRate > 0 then
         local sp = Instance.new("ParticleEmitter")
         sp.Texture = "rbxasset://textures/particles/sparkle_main.dds"
         sp.Color = ColorSequence.new(rarColor)
-        sp.Rate = 6 + (rar == "mythic" and 8 or rar == "legendary" and 4 or 2)
-        sp.Lifetime = NumberRange.new(1.5, 3.0); sp.Speed = NumberRange.new(0.2, 0.8)
-        sp.SpreadAngle = Vector2.new(40, 40); sp.VelocityInheritance = 0; sp.Enabled = true
-        sp.Transparency = NumberSequence.new(0.3, 0.9); sp.Size = NumberSequence.new(0.4, 0)
+        sp.LightEmission = 0.6
+        sp.Rate = visual.sparkleRate
+        sp.Lifetime = NumberRange.new(1.4, 3.0)
+        sp.Speed = NumberRange.new(0.2, 0.9)
+        sp.SpreadAngle = Vector2.new(45, 45)
+        sp.VelocityInheritance = 0
+        sp.Enabled = true
+        sp.Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 0.2),
+            NumberSequenceKeypoint.new(1, 1),
+        })
+        sp.Size = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, (rar == "mythic" or rar == "legendary") and 0.6 or 0.4),
+            NumberSequenceKeypoint.new(1, 0),
+        })
         sp.Parent = part
     end
 

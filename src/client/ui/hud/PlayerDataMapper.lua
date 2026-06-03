@@ -80,6 +80,14 @@ export type ServerPlayerPayload = {
     pets: { PetRecordPayload }?,
     equippedPet: string?,
     petEffects: PetEffectsPayload?,
+    -- Phase 12: монетизация.
+    gamepasses: { [string]: boolean }?,
+    equippedUids: { string }?,
+    petMaxEquipped: number?,
+    -- Phase 13: журнал находок.
+    discoveredOres: { [string]: boolean }?,
+    discoveredMilestones: { [string]: boolean }?,
+    discoveryProgress: { found: number?, total: number? }?,
 }
 
 export type MappedPlayerData = {
@@ -100,6 +108,12 @@ export type MappedPlayerData = {
     pets: { PetRecordPayload },
     equippedPet: string?,
     petEffects: PetEffectsPayload,
+    gamepasses: { [string]: boolean },
+    equippedUids: { string },
+    petMaxEquipped: number,
+    discoveredOres: { [string]: boolean },
+    discoveredMilestones: { [string]: boolean },
+    discoveryProgress: { found: number, total: number },
 }
 
 local PlayerDataMapper = {}
@@ -242,6 +256,15 @@ function PlayerDataMapper.fromServer(payload: ServerPlayerPayload): MappedPlayer
         pets = normalizePets(payload.pets),
         equippedPet = payload.equippedPet,
         petEffects = payload.petEffects or DEFAULT_PET_EFFECTS,
+        gamepasses = if typeof(payload.gamepasses) == "table" then payload.gamepasses else {},
+        equippedUids = if typeof(payload.equippedUids) == "table" then payload.equippedUids else {},
+        petMaxEquipped = payload.petMaxEquipped or 1,
+        discoveredOres = if typeof(payload.discoveredOres) == "table" then payload.discoveredOres else {},
+        discoveredMilestones = if typeof(payload.discoveredMilestones) == "table" then payload.discoveredMilestones else {},
+        discoveryProgress = {
+            found = (payload.discoveryProgress and payload.discoveryProgress.found) or 0,
+            total = (payload.discoveryProgress and payload.discoveryProgress.total) or 0,
+        },
     }
 end
 

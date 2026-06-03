@@ -12,10 +12,10 @@ local Children = Fusion.Children
 local TabBar = {}
 
 function TabBar.create(s: ScopeFactory.HudScope, state: HudStateModule.HudState)
-    -- Phase 11: ширину контейнера расширили под 6-й таб (PETS).
-    -- 6 * 58 + 5 * 6 = 378 → 384 с запасом.
+    -- Phase 13: 8-й таб 📖 ЖУРНАЛ (retention — коллекция руд).
+    -- 8 * 58 + 7 * 6 = 506.
     return s:New("Frame")({
-        Size = UDim2.new(0, 384, 0, 72),
+        Size = UDim2.new(0, 506, 0, 72),
         Position = UDim2.new(0, 8, 1, -80),
         BackgroundTransparency = 1,
         [Children] = {
@@ -71,6 +71,21 @@ function TabBar.create(s: ScopeFactory.HudScope, state: HudStateModule.HudState)
                 icon = "🐾",
                 label = "ПИТОМЦЫ",
                 tabId = "pets",
+                activeTab = state.activeTab,
+                panelOpen = state.panelOpen,
+            }),
+            -- Phase 12: монетизация. Tab_shop — ShopPanel filter.
+            TabBtn.create(s, {
+                icon = "🛒",
+                label = "МАГАЗИН",
+                tabId = "shop",
+                activeTab = state.activeTab,
+                panelOpen = state.panelOpen,
+            }),
+            TabBtn.create(s, {
+                icon = "📖",
+                label = "ЖУРНАЛ",
+                tabId = "journal",
                 activeTab = state.activeTab,
                 panelOpen = state.panelOpen,
             }),

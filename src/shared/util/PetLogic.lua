@@ -35,6 +35,10 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local shared = ReplicatedStorage:WaitForChild("shared")
 local Constants = require(shared.constants)
 local PetDatabase = require(shared.data.PetDatabase)
+-- Phase 12: gamepass «+2 pet slots» расширяет maxEquipped. MonetizationLogic
+-- читает только Constants + playerData.gamepasses → циклической зависимости с
+-- PetLogic нет (MonetizationLogic про петов не знает).
+local MonetizationLogic = require(shared.util.MonetizationLogic)
 
 local PetLogic = {}
 
@@ -45,8 +49,18 @@ local function cfg()
     return Constants.PETS or {}
 end
 
-function PetLogic.maxEquipped(): number
-    return math.max(1, math.floor(cfg().maxEquipped or 1))
+--[[
+    Сколько питомцев можно держать экипированными. База — Constants.PETS.maxEquipped
+    (1 на старте). Если передан `data` и игрок владеет геймпассом «+2 pet slots»
+    (Phase 12), потолок поднимается на slotBonus. Вызывать с data везде, где есть
+    профиль — иначе слоты пасса не учтутся.
+]]
+function PetLogic.maxEquipped(data: any?): number
+    local base = math.max(1, math.floor(cfg().maxEquipped or 1))
+    if data then
+        base += MonetizationLogic.petSlotBonus(data)
+    end
+    return base
 end
 
 --[[
@@ -129,7 +143,7 @@ function PetLogic.getEquippedUids(data: any): { string }
             end
         end
     end
-    local maxN = PetLogic.maxEquipped()
+    local maxN = PetLogic.maxEquipped(data)
     while #result > maxN do
         table.remove(result)
     end

@@ -4,6 +4,7 @@
 
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
+local TextChatService = game:GetService("TextChatService")
 
 local Logger = require(game:GetService("ReplicatedStorage")
     :WaitForChild("shared").util.Logger)
@@ -34,6 +35,15 @@ export type Deps = {
     --   /pet <id>  — выдать конкретного пета по petId (см. PetDatabase).
     --   /clearpets — удалить всех петов + снять экипировку.
     petManager: any?,
+    -- Phase 12: опционально — MonetizationManager.
+    --   /grantpass <key>     — эмулировать покупку геймпасса (vip / autoSell / petSlots).
+    --   /grantproduct <key>  — эмулировать девпродукт (coinsSmall / coinsMedium / egg10).
+    monetizationManager: any?,
+    -- Phase 13: опционально — DiscoveryManager.
+    --   /discover <oreId>  — открыть руду в журнале.
+    --   /discoverall       — открыть все руды (тест журнала).
+    --   /resetjournal      — сбросить журнал.
+    discoveryManager: any?,
 }
 
 local DevCommands = {}
@@ -65,6 +75,8 @@ function DevCommands.new(deps: Deps)
     self._dailyReward = deps.dailyReward
     self._leaderboard = deps.leaderboard
     self._petManager = deps.petManager
+    self._monetizationManager = deps.monetizationManager
+    self._discoveryManager = deps.discoveryManager
 
     if not isStudio() then
         self._log:info("DevCommands disabled (not Studio)")
@@ -78,6 +90,24 @@ function DevCommands.new(deps: Deps)
     for _, player in ipairs(Players:GetPlayers()) do
         self:_bind(player)
     end
+    -- TextChat (RBXGeneral SendAsync, Studio MCP) не триггерит legacy Chatted.
+    pcall(function()
+        TextChatService.OnIncomingMessage:Connect(function(message)
+            local textSource = message.TextSource
+            if not textSource then
+                return
+            end
+            local player = Players:GetPlayerByUserId(textSource.UserId)
+            if not player then
+                return
+            end
+            local text = message.Text
+            if typeof(text) ~= "string" or text:sub(1, 1) ~= "/" then
+                return
+            end
+            self:_dispatch(player, text)
+        end)
+    end)
     return self
 end
 
@@ -309,6 +339,82 @@ function DevCommands:_handleClearPets(player: Player)
     self:_notifyPlayer(player, "Питомцы очищены")
 end
 
+--[[
+    Phase 12 dev-команды (эмуляция покупок — в Studio реальные недоступны).
+]]
+function DevCommands:_handleGrantPass(player: Player, args: { string })
+    if not self._monetizationManager then
+        self:_notifyPlayer(player, "MonetizationManager не подключён")
+        return
+    end
+    local key = args[1]
+    if not key or key == "" then
+        self:_notifyPlayer(player, "Использование: /grantpass <vip|autoSell|petSlots>")
+        return
+    end
+    local ok = self._monetizationManager:devGrantPass(player, key)
+    if not ok then
+        self:_notifyPlayer(player, "Неизвестный пасс: " .. key)
+        return
+    end
+    self:_notifyPlayer(player, "Пасс выдан: " .. key)
+end
+
+function DevCommands:_handleGrantProduct(player: Player, args: { string })
+    if not self._monetizationManager then
+        self:_notifyPlayer(player, "MonetizationManager не подключён")
+        return
+    end
+    local key = args[1]
+    if not key or key == "" then
+        self:_notifyPlayer(player, "Использование: /grantproduct <coinsSmall|coinsMedium|egg10> [N]")
+        return
+    end
+    local n = tonumber(args[2]) or 1
+    local ok = self._monetizationManager:devGrantProduct(player, key, n)
+    if not ok then
+        self:_notifyPlayer(player, "Неизвестный продукт: " .. key)
+        return
+    end
+    self:_notifyPlayer(player, ("Продукт выдан: %s x%d"):format(key, math.floor(n)))
+end
+
+function DevCommands:_handleDiscover(player: Player, args: { string })
+    if not self._discoveryManager then
+        self:_notifyPlayer(player, "DiscoveryManager не подключён")
+        return
+    end
+    local oreId = args[1]
+    if not oreId or oreId == "" then
+        self:_notifyPlayer(player, "Использование: /discover <oreId>")
+        return
+    end
+    local ok = self._discoveryManager:devDiscover(player, oreId)
+    if not ok then
+        self:_notifyPlayer(player, "Неизвестная руда: " .. oreId)
+        return
+    end
+    self:_notifyPlayer(player, "Открыто: " .. oreId)
+end
+
+function DevCommands:_handleDiscoverAll(player: Player)
+    if not self._discoveryManager then
+        self:_notifyPlayer(player, "DiscoveryManager не подключён")
+        return
+    end
+    self._discoveryManager:devDiscoverAll(player)
+    self:_notifyPlayer(player, "Журнал: все руды открыты")
+end
+
+function DevCommands:_handleResetJournal(player: Player)
+    if not self._discoveryManager then
+        self:_notifyPlayer(player, "DiscoveryManager не подключён")
+        return
+    end
+    self._discoveryManager:devResetJournal(player)
+    self:_notifyPlayer(player, "Журнал сброшен")
+end
+
 function DevCommands:_handleSkipTutorial(player: Player)
     -- Принудительно завершает туториал на сервере (tutorialStep = 3).
     -- Удобно для тестов, когда нужно проверить не-онбординг-фичу, но
@@ -325,50 +431,64 @@ end
 
 function DevCommands:_handleHelp(player: Player)
     self:_notifyPlayer(player,
-        "/coins [N], /reset, /maxlvl <id>, /skiptut, /rebirth [N], /daily, /setday +N, /resetdaily, /boost <мин>, /leaderboard refresh, /egg [N], /hatch, /pet <id>, /clearpets"
+        "/coins [N], /reset, /maxlvl <id>, /skiptut, /rebirth [N], /daily, /setday +N, /resetdaily, /boost <мин>, /leaderboard refresh, /egg [N], /hatch, /pet <id>, /clearpets, /grantpass <key>, /grantproduct <key> [N], /discover <id>, /discoverall, /resetjournal"
     )
+end
+
+function DevCommands:_dispatch(player: Player, msg: string)
+    if msg:sub(1, 1) ~= "/" then
+        return
+    end
+    local parts = string.split(msg, " ")
+    local cmd = parts[1]:lower()
+    local args = { table.unpack(parts, 2) }
+
+    if cmd == "/coins" then
+        self:_handleCoins(player, args)
+    elseif cmd == "/reset" then
+        self:_handleReset(player)
+    elseif cmd == "/maxlvl" then
+        self:_handleMaxUpgrade(player, args)
+    elseif cmd == "/skiptut" then
+        self:_handleSkipTutorial(player)
+    elseif cmd == "/rebirth" then
+        self:_handleRebirth(player, args)
+    elseif cmd == "/daily" then
+        self:_handleDaily(player)
+    elseif cmd == "/setday" then
+        self:_handleSetDay(player, args)
+    elseif cmd == "/resetdaily" then
+        self:_handleResetDaily(player)
+    elseif cmd == "/boost" then
+        self:_handleBoost(player, args)
+    elseif cmd == "/leaderboard" then
+        self:_handleLeaderboardCmd(player, args)
+    elseif cmd == "/egg" then
+        self:_handleEgg(player, args)
+    elseif cmd == "/hatch" then
+        self:_handleEgg(player, { "1" })
+    elseif cmd == "/pet" then
+        self:_handlePet(player, args)
+    elseif cmd == "/clearpets" then
+        self:_handleClearPets(player)
+    elseif cmd == "/grantpass" then
+        self:_handleGrantPass(player, args)
+    elseif cmd == "/grantproduct" then
+        self:_handleGrantProduct(player, args)
+    elseif cmd == "/discover" then
+        self:_handleDiscover(player, args)
+    elseif cmd == "/discoverall" then
+        self:_handleDiscoverAll(player)
+    elseif cmd == "/resetjournal" then
+        self:_handleResetJournal(player)
+    elseif cmd == "/devhelp" then
+        self:_handleHelp(player)
+    end
 end
 
 function DevCommands:_bind(player: Player)
     player.Chatted:Connect(function(msg)
-        if msg:sub(1, 1) ~= "/" then
-            return
-        end
-        local parts = string.split(msg, " ")
-        local cmd = parts[1]:lower()
-        local args = { table.unpack(parts, 2) }
-
-        if cmd == "/coins" then
-            self:_handleCoins(player, args)
-        elseif cmd == "/reset" then
-            self:_handleReset(player)
-        elseif cmd == "/maxlvl" then
-            self:_handleMaxUpgrade(player, args)
-        elseif cmd == "/skiptut" then
-            self:_handleSkipTutorial(player)
-        elseif cmd == "/rebirth" then
-            self:_handleRebirth(player, args)
-        elseif cmd == "/daily" then
-            self:_handleDaily(player)
-        elseif cmd == "/setday" then
-            self:_handleSetDay(player, args)
-        elseif cmd == "/resetdaily" then
-            self:_handleResetDaily(player)
-        elseif cmd == "/boost" then
-            self:_handleBoost(player, args)
-        elseif cmd == "/leaderboard" then
-            self:_handleLeaderboardCmd(player, args)
-        elseif cmd == "/egg" then
-            self:_handleEgg(player, args)
-        elseif cmd == "/hatch" then
-            self:_handleEgg(player, { "1" })
-        elseif cmd == "/pet" then
-            self:_handlePet(player, args)
-        elseif cmd == "/clearpets" then
-            self:_handleClearPets(player)
-        elseif cmd == "/devhelp" then
-            self:_handleHelp(player)
-        end
+        self:_dispatch(player, msg)
     end)
 end
 

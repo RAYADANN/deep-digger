@@ -19,6 +19,8 @@ local RebirthFX = require(script.ui.RebirthFX)
 local DailyRewardModal = require(script.ui.DailyRewardModal)
 local RewardFX = require(script.ui.RewardFX)
 local PetVisual = require(script.ui.PetVisual)
+local PetHatchFX = require(script.ui.PetHatchFX)
+local OreDiscoveryFX = require(script.ui.OreDiscoveryFX)
 local PetLogic = require(shared.util.PetLogic)
 local ScopeFactory = require(script.ui.hud.ScopeFactory)
 local Net = require(modules.Net)
@@ -134,12 +136,16 @@ Net:Connect("Notify", function(payload)
     if typeof(payload.color) == "table" then
         color = Color3.fromRGB(payload.color.r or 255, payload.color.g or 255, payload.color.b or 255)
     end
-    Notification.show({
-        text = payload.text,
-        color = color,
-        icon = payload.icon,
-        duration = payload.duration,
-    })
+    -- Phase 13: для «новой находки» обычный тост не показываем — его заменяет
+    -- полноценная reveal-анимация OreDiscoveryFX (иначе двойной фидбек).
+    if payload.kind ~= "ore_discovered" then
+        Notification.show({
+            text = payload.text,
+            color = color,
+            icon = payload.icon,
+            duration = payload.duration,
+        })
+    end
     -- Phase 9: RebirthManager шлёт kind="rebirth" вместе с тостом. RebirthFX
     -- работает локально (точка игрока), pcall — чтобы упавший FX не сорвал
     -- сам тост ребёрта.
@@ -158,6 +164,26 @@ Net:Connect("Notify", function(payload)
     elseif payload.kind == "daily_reward" then
         pcall(function()
             RewardFX.burst(payload.rarity)
+        end)
+    -- Phase 12: девпродукт «Egg 10x» — server-authoritative hatch FX.
+    elseif payload.kind == "egg_purchase" then
+        pcall(function()
+            PetHatchFX.play(payload.pets)
+        end)
+    -- Phase 13: первая добыча новой руды → reveal-анимация «НОВАЯ НАХОДКА»
+    -- (очередь внутри FX обрабатывает несколько находок за удар).
+    elseif payload.kind == "ore_discovered" then
+        pcall(function()
+            OreDiscoveryFX.play(payload)
+            if typeof(payload.oreId) == "string" then
+                SoundManager.playForOre("break", payload.oreId, payload.rarity)
+            end
+        end)
+    -- Полностью открытый слой — celebration: coin-rain + звук продажи.
+    elseif payload.kind == "layer_milestone" then
+        pcall(function()
+            RewardFX.burst(payload.rarity or "legendary")
+            SoundManager.play("sell_success")
         end)
     end
 end)

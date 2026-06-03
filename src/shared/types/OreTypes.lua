@@ -127,6 +127,20 @@ export type PlayerData = {
     pets: { PetRecord },
     equippedPet: string?,
     petUidCounter: number,
+    -- Phase 12 (Монетизация): кэш владения геймпассами по key
+    -- (Constants.GAMEPASSES). Source of truth — UserOwnsGamePassAsync,
+    -- MonetizationManager синкает кэш на заходе и на покупке. Девпродукты
+    -- (coin packs / egg 10x) сюда НЕ пишутся — они повторяемые.
+    gamepasses: { [string]: boolean },
+    -- Phase 13 (Ore Discovery Index): журнал находок — ключевая retention-
+    -- механика (цель охоты = руда).
+    --   discoveredOres       — { [oreId] = true } какие руды найдены (>=1 раз).
+    --                          ПЕРЕЖИВАЕТ ребёрт (это коллекция-история, не
+    --                          прогрессия) — RebirthManager поле не трогает.
+    --   discoveredMilestones — { [layerId] = true } за какие слои выдана
+    --                          milestone-награда (защита от двойного грантa).
+    discoveredOres: { [string]: boolean },
+    discoveredMilestones: { [string]: boolean },
 }
 
 export type UpgradeDef = {

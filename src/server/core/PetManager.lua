@@ -117,6 +117,23 @@ local function addPet(data: any, petId: string): any?
     return rec
 end
 
+-- Phase 12: нормализует список экипированных uid'ов обратно в поле
+-- equippedPet. 0 → nil, 1 → строка (backward-compat со старыми 1-slot
+-- профилями), >1 → список (multi-slot после gamepass «+2 pet slots»).
+-- PetLogic.getEquippedUids читает обе формы.
+local function storeEquipped(uids: { string }): any
+    if #uids == 0 then
+        return nil
+    elseif #uids == 1 then
+        return uids[1]
+    end
+    local copy = {}
+    for _, u in ipairs(uids) do
+        table.insert(copy, u)
+    end
+    return copy
+end
+
 -- Сериализация записи пета для клиента (FX + панель): добавляем def-поля.
 local function toPayload(rec: any): any?
     if not rec then
@@ -134,6 +151,28 @@ local function toPayload(rec: any): any?
         icon = def.icon,
         effect = { kind = def.effect.kind, value = def.effect.value },
     }
+end
+
+--[[
+    Внутренняя вылупка `n` петов в data.pets (без списания монет — цену
+    проверяет вызывающий). Возвращает hatched-список (toPayload). Авто-equip
+    первого пета, если ничего не экипировано (жанровый UX: первый пет сразу
+    даёт буст без лишнего клика). Используется и платным HatchEgg, и
+    бесплатным grantHatch (Phase 12 «Egg 10x» / dev).
+]]
+function PetManager:_hatchInto(data: any, n: number)
+    local petIds = EggManager.hatch(DEFAULT_EGG_ID, n)
+    local hatched = {}
+    for _, petId in ipairs(petIds) do
+        local rec = addPet(data, petId)
+        if rec then
+            table.insert(hatched, toPayload(rec))
+        end
+    end
+    if #PetLogic.getEquippedUids(data) == 0 and #hatched > 0 then
+        data.equippedPet = hatched[1].uid
+    end
+    return hatched
 end
 
 --[[
@@ -166,22 +205,7 @@ function PetManager:_handleHatch(player: Player, count: number?)
 
     -- Списываем монеты, катим хэтчи.
     data.coins = coins - cost
-    local petIds = EggManager.hatch(DEFAULT_EGG_ID, n)
-
-    local hatched = {}
-    for _, petId in ipairs(petIds) do
-        local rec = addPet(data, petId)
-        if rec then
-            table.insert(hatched, toPayload(rec))
-        end
-    end
-
-    -- Авто-equip: если ничего не экипировано и что-то вылупилось — надеваем
-    -- первого. Это «жанровый» UX: первый пет сразу даёт буст без лишнего
-    -- клика. Игрок может сменить вручную.
-    if #PetLogic.getEquippedUids(data) == 0 and #hatched > 0 then
-        data.equippedPet = hatched[1].uid
-    end
+    local hatched = self:_hatchInto(data, n)
 
     self:_sync(player)
 
@@ -201,7 +225,12 @@ function PetManager:_handleHatch(player: Player, count: number?)
 end
 
 --[[
-    EquipPet: 1 slot MVP — экипировка заменяет текущего пета.
+    EquipPet: экипировать пета. Слотов maxEquipped(data) — 1 на старте, 3 с
+    геймпассом «+2 pet slots» (Phase 12). Поведение:
+      * uid уже экипирован → no-op success (idempotent).
+      * есть свободный слот → добавляем.
+      * слоты заняты → вытесняем самого старого (FIFO) — согласовано со
+        старым 1-slot UX, где equip «заменял» текущего пета.
 ]]
 function PetManager:_handleEquip(player: Player, uid: string?)
     local data = self:_data(player)
@@ -215,17 +244,28 @@ function PetManager:_handleEquip(player: Player, uid: string?)
     if not findRecord(data, uid) then
         return { success = false, error = "not_owned", message = "Питомец не найден" }
     end
-    -- MVP: один слот. equippedPet — строка. (multi-slot из Фазы 12 заменит
-    -- эту строку на список и будет проверять maxEquipped.)
-    data.equippedPet = uid
+
+    local maxN = PetLogic.maxEquipped(data)
+    local current = PetLogic.getEquippedUids(data)
+    for _, u in ipairs(current) do
+        if u == uid then
+            -- Уже экипирован — идемпотентный успех.
+            return { success = true, equippedPet = data.equippedPet }
+        end
+    end
+    table.insert(current, uid)
+    -- Вытесняем самого старого, пока не уложимся в слоты.
+    while #current > maxN do
+        table.remove(current, 1)
+    end
+    data.equippedPet = storeEquipped(current)
     self:_sync(player)
-    return { success = true, equippedPet = uid }
+    return { success = true, equippedPet = data.equippedPet }
 end
 
 --[[
-    UnequipPet: снять экипировку. uid опционален (MVP — один слот, просто
-    очищаем). Если передан uid и он не совпадает с экипированным — no-op
-    success (idempotent).
+    UnequipPet: снять экипировку. Если передан uid — снимаем именно его
+    (multi-slot). Без uid — очищаем все слоты. Idempotent.
 ]]
 function PetManager:_handleUnequip(player: Player, uid: string?)
     local data = self:_data(player)
@@ -233,9 +273,20 @@ function PetManager:_handleUnequip(player: Player, uid: string?)
         return { success = false, error = "no_profile" }
     end
     ensurePetFields(data)
-    data.equippedPet = nil
+    if typeof(uid) == "string" and uid ~= "" then
+        local current = PetLogic.getEquippedUids(data)
+        local kept: { string } = {}
+        for _, u in ipairs(current) do
+            if u ~= uid then
+                table.insert(kept, u)
+            end
+        end
+        data.equippedPet = storeEquipped(kept)
+    else
+        data.equippedPet = nil
+    end
     self:_sync(player)
-    return { success = true }
+    return { success = true, equippedPet = data.equippedPet }
 end
 
 --[[
@@ -248,7 +299,8 @@ function PetManager:onProfileLoaded(player: Player)
         return
     end
     ensurePetFields(data)
-    -- Чистим equippedPet, если указывает на несуществующего пета.
+    -- Чистим equippedPet от uid'ов удалённых петов, сохраняя multi-slot
+    -- (geteEquippedUids уже клампит длину по maxEquipped(data)).
     local equipped = PetLogic.getEquippedUids(data)
     local valid: { string } = {}
     for _, uid in ipairs(equipped) do
@@ -256,38 +308,33 @@ function PetManager:onProfileLoaded(player: Player)
             table.insert(valid, uid)
         end
     end
-    if #valid == 0 then
-        data.equippedPet = nil
-    else
-        data.equippedPet = valid[1]
-    end
+    data.equippedPet = storeEquipped(valid)
 end
 
 ----------------------------------------------------------------------
 -- DevHooks (DevCommands, только Studio)
 ----------------------------------------------------------------------
 
--- /egg [N] и /hatch: бесплатно вылупить count петов (без списания монет).
-function PetManager:devHatch(player: Player, count: number?)
+--[[
+    grantHatch: бесплатно вылупить `count` петов (без списания монет). Публичный
+    хук для Phase 12 (девпродукт «Egg 10x» в MonetizationManager) и DevCommands.
+    Возвращает hatched-список для клиентского PetHatchFX.
+]]
+function PetManager:grantHatch(player: Player, count: number?)
     local data = self:_data(player)
     if not data then
         return nil
     end
     ensurePetFields(data)
     local n = EggManager.clampCount(count)
-    local petIds = EggManager.hatch(DEFAULT_EGG_ID, n)
-    local hatched = {}
-    for _, petId in ipairs(petIds) do
-        local rec = addPet(data, petId)
-        if rec then
-            table.insert(hatched, toPayload(rec))
-        end
-    end
-    if #PetLogic.getEquippedUids(data) == 0 and #hatched > 0 then
-        data.equippedPet = hatched[1].uid
-    end
+    local hatched = self:_hatchInto(data, n)
     self:_sync(player)
     return hatched
+end
+
+-- /egg [N] и /hatch: бесплатно вылупить count петов (без списания монет).
+function PetManager:devHatch(player: Player, count: number?)
+    return self:grantHatch(player, count)
 end
 
 -- /pet <id>: выдать конкретного пета по petId.

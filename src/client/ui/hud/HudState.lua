@@ -66,6 +66,17 @@ export type HudState = {
     pets: any,
     equippedPet: any,
     petEffects: any,
+    -- Phase 12: монетизация.
+    --   gamepasses   — кэш владения { vip=true, ... } для ShopPanel / VIP-chip.
+    --   equippedUids — список uid экипированных петов (multi-slot).
+    gamepasses: any,
+    equippedUids: any,
+    petMaxEquipped: any,
+    -- Phase 13: журнал находок (retention — цель охоты = руда).
+    discoveredOres: any,
+    discoveredMilestones: any,
+    discoveryFound: any,
+    discoveryTotal: any,
 }
 
 local HudState = {}
@@ -108,6 +119,13 @@ function HudState.create(scope: ScopeFactory.HudScope): HudState
         petEffects = scope:Value({
             damage = 1, luck = 1, coin = 0, multiMine = 0, equippedCount = 0,
         } :: PlayerDataMapper.PetEffectsPayload),
+        gamepasses = scope:Value({} :: { [string]: boolean }),
+        equippedUids = scope:Value({} :: { string }),
+        petMaxEquipped = scope:Value(1),
+        discoveredOres = scope:Value({} :: { [string]: boolean }),
+        discoveredMilestones = scope:Value({} :: { [string]: boolean }),
+        discoveryFound = scope:Value(0),
+        discoveryTotal = scope:Value(0),
     }
 end
 
@@ -155,8 +173,23 @@ function HudState.applyServerPayload(state: HudState, payload: PlayerDataMapper.
     state.leaderboardPlacement:set(mapped.leaderboardPlacement)
     -- Phase 11: pets. Мгновенно (без tween) — hatch/equip дискретны.
     state.pets:set(mapped.pets)
-    state.equippedPet:set(mapped.equippedPet)
     state.petEffects:set(mapped.petEffects)
+    -- Phase 12: монетизация + multi-slot equip.
+    state.gamepasses:set(mapped.gamepasses)
+    state.equippedUids:set(mapped.equippedUids)
+    state.petMaxEquipped:set(mapped.petMaxEquipped)
+    -- equippedPet — первый uid для PetVisual / backward-compat; PetsPanel
+    -- читает equippedUids для multi-slot.
+    if #mapped.equippedUids > 0 then
+        state.equippedPet:set(mapped.equippedUids[1])
+    else
+        state.equippedPet:set(mapped.equippedPet)
+    end
+    -- Phase 13: журнал находок.
+    state.discoveredOres:set(mapped.discoveredOres)
+    state.discoveredMilestones:set(mapped.discoveredMilestones)
+    state.discoveryFound:set(mapped.discoveryProgress.found)
+    state.discoveryTotal:set(mapped.discoveryProgress.total)
 end
 
 function HudState.applyDepth(state: HudState, depth: number, layerId: string, layerName: string)

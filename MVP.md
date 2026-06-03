@@ -5,7 +5,7 @@
 > **Архитектура:** 3D Neighbor Reveal (текущая). К вертикальной сетке 6×N не возвращаемся.
 > **Кто пишет код:** AI-агент в Cursor.
 > **Кто тестирует:** разработчик (Roblox Studio + Rojo).
-> **Статус:** Фазы 0–11 закрыты 🟢 (Фаза 5 ждёт плейтест-профайл), Фаза 12 (Монетизация) — 🔴 на очереди.
+> **Статус:** Фазы 0–13 закрыты 🟢 (Фаза 5 ждёт плейтест-профайл; 12–13 ждут коммита). Фазы 14–15 (визуал, soft launch) — 🔴.
 > **Обновлено:** 2026-06-03
 
 ---
@@ -41,8 +41,11 @@
 7. Зайти на следующий день, забрать **daily reward**, увидеть себя в **лидерборде**.
 8. Купить **gamepass** или **coin pack** через Roblox (минимум 3 пасса + 2 девпродукта).
 9. Выйти и вернуться — прогресс тот же (ProfileService), питомцы и ребёрты сохранены.
-10. Играть 30+ минут подряд с **ощутимым «соком»** ударов (звуки, screen shake, particles) без утечек FPS.
-11. Получить **3 туториал-подсказки** в первые 30 секунд (клик → продай → купи кирку).
+10. **Открыть журнал находок** (8-й таб 📖): видеть «???» до первой добычи, после удара — имя/иконка руды; при полном слое — milestone-монеты и тост.
+11. Играть 30+ минут подряд с **ощутимым «соком»** ударов (звуки, screen shake, particles) без утечек FPS.
+12. Получить **3 туториал-подсказки** в первые 30 секунд (клик → продай → купи кирку).
+
+**Retention-принцип (не Pet Simulator):** цель охоты — **руда и слои глубины**, петы — инструмент. Без **Ore Discovery Index** нет долгосрочной мотивации «найти всё» → удержание падает.
 
 ---
 
@@ -77,9 +80,10 @@
 | 6 | 8 → 9 | ✅ Туториал + Error UX + tooltip + count-up (Фаза 8); ✅ **Rebirth/Prestige** loop (Фаза 9) |
 | 7 | 10 | ✅ **Daily reward** (7-day cycle, streak, x2 boost'ы) + **глобальный leaderboard** (MemoryStoreSortedMap, top-50 coins/depth, avatar thumbnails) |
 | 8–9 | 11 | **Pets MVP**: 5–10 питомцев, egg-система, equip slot, эффекты |
-| 10 | 12 | Монетизация: 3–4 game-passes, 2–3 DevProducts (coin packs) |
-| 11 | 13 | Визуальный пасс: материалы по слоям, key art, иконка, thumbnail |
-| 12–13 | 14 | Soft launch: 2-player playtest, balance fixes, релиз unlisted → public |
+| 10 | 12 | ✅ Монетизация: 3–4 game-passes, 2–3 DevProducts (coin packs) |
+| 11 | **13** | **Ore Discovery Index**: 8-й таб 📖 ЖУРНАЛ, 30 руд, milestone за полный слой, переживает ребёрт |
+| 12 | 14 | Визуальный пасс: материалы по слоям, key art, иконка, thumbnail |
+| 13–14 | 15 | Soft launch: 2-player playtest, balance fixes, релиз unlisted → public |
 
 ---
 
@@ -307,27 +311,51 @@
 
 ---
 
-### █ Фаза 12 — Монетизация 🔴
+### █ Фаза 12 — Монетизация 🟢
 
 **Цель:** revenue stream для итераций после запуска.
 
-- [ ] **Game-passes** (создать в Creator Hub, ID в `Constants.GAMEPASSES`):
-  - VIP (399 Robux): +10% монет, эксклюзивный титул, VIP-цвет ника.
-  - Auto-sell (599 Robux): unlocks `autoSellUnlocked = true` сразу.
-  - +2 pet slots (799 Robux): максимум 3 пета вместо 1.
-- [ ] **DevProducts**:
+- [x] **Game-passes** (`Constants.GAMEPASSES`, id=0 плейсхолдер до Creator Hub):
+  - VIP (399 Robux): +10% монет (`MonetizationLogic.coinBoost` → boost-стадия SellInventory аддитивно с daily/pet), титул «👑 VIP» + золотой ник (BillboardGui на Head).
+  - Auto-sell (599 Robux): `autoSellUnlocked = true` навсегда при владении.
+  - +2 pet slots (799 Robux): `PetLogic.maxEquipped(data)` = 1 + 2 = 3; multi-slot equip (список uid'ов).
+- [x] **DevProducts** (`Constants.DEVPRODUCTS`):
   - Small Coin Pack (99 Robux): 10k coins.
   - Medium Coin Pack (399 Robux): 100k coins.
-  - Egg 10x (199 Robux): 10 яиц.
-- [ ] **`server/core/MonetizationManager.lua`**: подключение `MarketplaceService.ProcessReceipt`, выдача наград, защита от двойного начисления через DataStore.
-- [ ] **UI Shop**: вкладка в HUD с пассами и девпродуктами, кнопка PURCHASE → `MarketplaceService:PromptPurchase`.
-- [ ] **Owned status**: gamepasses подгружаются на заходе, отражаются в HUD (VIP-значок, auto-sell всегда on).
+  - Egg 10x (199 Robux): 10 яиц через `PetManager:grantHatch` + `kind="egg_purchase"` → PetHatchFX.
+- [x] **`server/core/MonetizationManager.lua`**: DI (profileManager, onProfileChanged, notify, petManager). `ProcessReceipt` + DataStore `PurchaseHistory_v1` (защита от двойного начисления). `PromptGamePassPurchaseFinished` + `onProfileLoaded` → `UserOwnsGamePassAsync` (source of truth) → кэш `playerData.gamepasses`. DevHooks: `devGrantPass` / `devGrantProduct`.
+- [x] **`shared/util/MonetizationLogic.lua`**: единый источник формул (ownsGamepass, coinBoost, petSlotBonus, lookup by id).
+- [x] **UI Shop**: 7-й таб 🛒 `ShopPanel` + `ShopCard`, PURCHASE → `PromptGamePassPurchase` / `PromptProductPurchase` (disabled при id=0 + подсказка Studio).
+- [x] **Owned status**: gamepasses в payload → TopBar `👑 VIP` chip, ShopPanel «✓ КУПЛЕНО», PetsPanel «слотов N/3», auto-sell через `autoSellUnlocked` в upgrades.
+- [x] **DevCommands**: `/grantpass <key>`, `/grantproduct <key> [N]` (эмуляция в Studio).
 
-**Тест:** в Studio нельзя покупать пассы; настроить ID в Creator Hub, опубликовать unlisted → тест-аккаунт покупает за тест-Robux → награда приходит.
+**Тест:** `/grantpass vip` → TopBar 👑 VIP, продажа +10% монет. `/grantpass autoSell` → auto-sell при полном инвентаре. `/grantpass petSlots` → экип 3 петов, «слотов 3/3». `/grantproduct coinsSmall` → +10k. `/grantproduct egg10` → PetHatchFX 10×. В проде: подставить реальные id в Constants → unlisted → тест-Robux.
+
+**Дата закрытия:** 2026-06-03.
 
 ---
 
-### █ Фаза 13 — Визуальная идентичность 🔴
+### █ Фаза 13 — Ore Discovery Index (Журнал находок) 🟢
+
+**Цель:** ключевое удержание — коллекционирование **руды** (не петов). Игрок видит прогресс «Открыто N/M», охотится за редкими находками и закрывает слои ради milestone-монет.
+
+- [x] **`shared/util/DiscoveryLogic.lua`**: каталог 30 руд из `OreDatabase` (без `test_*`), прогресс по слою/всего, `milestoneReward(layerId)`.
+- [x] **`Constants.DISCOVERY.layerMilestoneCoins`**: разовая награда за **полностью** открытый слой (dirt → void), без ретро-выдачи при миграции.
+- [x] **`playerData`**: `discoveredOres`, `discoveredMilestones` — **не сбрасываются** при ребёрте.
+- [x] **`server/core/DiscoveryManager.lua`**: `recordDiscovery` при `loot.added > 0` (основная + bonus multiMine руда), notify `kind="ore_discovered"` / `kind="layer_milestone"`, `onProfileLoaded` бэкфилл из инвентаря (тихо).
+- [x] **MineBlock** (`init.server.lua`): хук после `MiningLoot.tryAddOre`, `buildHudPayload` шлёт `discoveredOres`, `discoveredMilestones`, `discoveryProgress`.
+- [x] **UI**: 8-й таб 📖 **ЖУРНАЛ** (`TabBar` ~506px), `JournalPanel` + `OreEntry` (??? до находки), заголовок «Открыто X/Y».
+- [x] **DevCommands** (Studio): `/discover <oreId>`, `/discoverall`, `/resetjournal`.
+- [x] **Клиент Notify**: `OreDiscoveryFX` (reveal «НОВАЯ НАХОДКА» + очередь), `RewardFX` на milestone; звук break/sell.
+- [x] **Визуал блоков по редкости**: материал (Slate→Neon), reflectance, PointLight-аура (rare+), sparkle-частицы, пульс legendary/mythic (`MiningRenderer`).
+
+**Тест:** `/discover coal` → запись в журнале + тост. Добыть новую руду в игре → тост + слот открыт. Закрыть все руды слоя Dirt → milestone-монеты + тост. Ребёрт → журнал на месте. Перезаход → тот же журнал.
+
+**Дата закрытия:** 2026-06-03 (ждёт Studio smoke + коммит вместе с Фазой 12).
+
+---
+
+### █ Фаза 14 — Визуальная идентичность 🔴
 
 **Цель:** игра выделяется в Roblox Discover.
 
@@ -343,7 +371,7 @@
 
 ---
 
-### █ Фаза 14 — Soft Launch & Стабилизация 🔴
+### █ Фаза 15 — Soft Launch & Стабилизация 🔴
 
 **Цель:** релиз с минимальным риском.
 
@@ -355,7 +383,7 @@
 - [ ] **Unlisted release**: 10–20 друзей/Discord-знакомых играют 3 дня.
 - [ ] Сбор фидбека → 1 баланс-патч.
 - [ ] **Public release** + первые 1–2 промо-поста в Roblox-сообществах.
-- [ ] Чек по списку «MVP готов» — все 11 пунктов зелёные.
+- [ ] Чек по списку «MVP готов» — все 12 пунктов зелёные.
 
 ---
 

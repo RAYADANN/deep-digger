@@ -112,6 +112,19 @@ local DEFAULT_DATA = {
     pets = {},
     equippedPet = nil,
     petUidCounter = 0,
+    -- Phase 12 (Монетизация).
+    --   gamepasses: кэш владения по key (vip / autoSell / petSlots). Source of
+    --     truth — MarketplaceService:UserOwnsGamePassAsync; MonetizationManager
+    --     синкает на onProfileLoaded и на PromptGamePassPurchaseFinished.
+    --     Template-мердж добавит {} старым профилям без миграции.
+    gamepasses = {},
+    -- Phase 13 (Ore Discovery Index — журнал находок).
+    --   discoveredOres: { [oreId] = true } — найденные руды. Переживает ребёрт
+    --     (коллекция-история). Template-мердж добавит {} старым профилям;
+    --     DiscoveryManager:onProfileLoaded бэкфилит руды из текущего инвентаря.
+    --   discoveredMilestones: { [layerId] = true } — выданные награды за слой.
+    discoveredOres = {},
+    discoveredMilestones = {},
 }
 
 -- Создать ProfileStore

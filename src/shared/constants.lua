@@ -200,4 +200,116 @@ Constants.PETS = {
     },
 }
 
+-- Phase 12 (Монетизация): revenue stream после запуска.
+--
+-- GAMEPASSES — одноразовые покупки (Robux), проверяются через
+--   MarketplaceService:UserOwnsGamePassAsync (source of truth) и кэшируются
+--   в playerData.gamepasses[key]. Эффекты применяет MonetizationManager,
+--   формулы (coinBoost / petSlotBonus) — единый источник в
+--   shared/util/MonetizationLogic.lua.
+--
+--   key        — внутренний ключ (НЕ id). Используется в playerData.gamepasses,
+--                DevCommands /grantpass <key>, ShopPanel.
+--   id         — реальный Gamepass ID из Creator Hub. 0 = ПЛЕЙСХОЛДЕР, заменить
+--                после создания пасса (в Studio реальные покупки невозможны —
+--                эмуляция через /grantpass).
+--   priceRobux — справочная цена для UI (фактическую берёт Roblox из Hub).
+--   coinBoost  — VIP: аддитивный бонус к продаже (+0.10 = +10%), ложится в ту
+--                же boost-стадию SellInventory, что daily/pet coinBoost.
+--   slotBonus  — petSlots: +N к Constants.PETS.maxEquipped (через PetLogic).
+Constants.GAMEPASSES = {
+    vip = {
+        key = "vip",
+        id = 0,
+        name = "VIP",
+        icon = "👑",
+        priceRobux = 399,
+        desc = "+10% монет, титул VIP и золотой ник",
+        coinBoost = 0.10,
+        title = "VIP",
+        nameColor = Color3.fromRGB(255, 210, 50),
+    },
+    autoSell = {
+        key = "autoSell",
+        id = 0,
+        name = "Auto-Sell",
+        icon = "♻",
+        priceRobux = 599,
+        desc = "Авто-продажа навсегда — инвентарь не переполнится",
+    },
+    petSlots = {
+        key = "petSlots",
+        id = 0,
+        name = "+2 слота питомцев",
+        icon = "🐾",
+        priceRobux = 799,
+        desc = "Экипируй до 3 питомцев одновременно",
+        slotBonus = 2,
+    },
+}
+
+-- DEVPRODUCTS — повторяемые покупки (Robux), обрабатываются через
+--   MarketplaceService.ProcessReceipt в MonetizationManager. Защита от
+--   двойного начисления — DataStore purchase history по PurchaseId.
+--
+--   key    — внутренний ключ (DevCommands /grantproduct <key> [N], ShopPanel).
+--   id     — реальный DeveloperProduct ID из Creator Hub. 0 = ПЛЕЙСХОЛДЕР.
+--   kind   — "coins" | "eggs" — что выдаём.
+--   amount — сколько (монет / яиц).
+Constants.DEVPRODUCTS = {
+    coinsSmall = {
+        key = "coinsSmall",
+        id = 0,
+        name = "Small Coin Pack",
+        icon = "💰",
+        priceRobux = 99,
+        kind = "coins",
+        amount = 10000,
+        desc = "+10 000 монет",
+    },
+    coinsMedium = {
+        key = "coinsMedium",
+        id = 0,
+        name = "Medium Coin Pack",
+        icon = "💰",
+        priceRobux = 399,
+        kind = "coins",
+        amount = 100000,
+        desc = "+100 000 монет",
+    },
+    egg10 = {
+        key = "egg10",
+        id = 0,
+        name = "Egg 10x",
+        icon = "🥚",
+        priceRobux = 199,
+        kind = "eggs",
+        amount = 10,
+        desc = "10 яиц сразу",
+    },
+}
+
+-- Phase 13 (Ore Discovery Index): ключевая retention-механика. Цель охоты —
+-- сама руда (как в оригинале), а не петы. Журнал находок («Открыто N/M»)
+-- превращает копание в коллекционирование кор-ресурса.
+--
+-- DISCOVERY:
+--   layerMilestoneCoins — разовая награда за ПОЛНОСТЬЮ открытый слой (все
+--     руды слоя найдены хотя бы раз). Масштабируется с глубиной — нижние
+--     слои гейтятся ребёртами, поэтому награда растёт на порядки. Защита от
+--     двойной выдачи — playerData.discoveredMilestones[layerId].
+-- Формулы (прогресс, каталог по слоям, проверка полноты) — единый источник в
+-- shared/util/DiscoveryLogic.lua. Сами руды — shared/data/OreDatabase.lua.
+Constants.DISCOVERY = {
+    layerMilestoneCoins = {
+        dirt = 2500,
+        stone = 15000,
+        limestone = 75000,
+        crimson = 300000,
+        marble = 1000000,
+        obsidian = 5000000,
+        void = 25000000,
+    },
+}
+
 return Constants
