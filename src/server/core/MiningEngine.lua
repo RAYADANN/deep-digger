@@ -96,17 +96,40 @@ function MiningEngine:_layer(y)
     return "void"
 end
 
+function MiningEngine:_oreWeight(ore: OreDef): number
+    local w = ore.weight
+    if w ~= nil then
+        return w
+    end
+    local fallback = Constants.RARITY_DEFAULT_WEIGHT[ore.rarity]
+    return fallback or 1
+end
+
+--[[
+    Взвешенный ролл по пулу слоя. Наполнитель (weight ~900) доминирует,
+    uncommon/rare/epic — изредка и очень редко (Minecraft-style).
+]]
 function MiningEngine:_roll(layerId)
     local pool = self._db[layerId] or self._db["dirt"]
-    local items = {}
-    for rar, ch in pairs(Constants.RARITY_CHANCES) do table.insert(items, {rar = rar, ch = ch}) end
-    table.sort(items, function(a, b) return a.ch > b.ch end)
-    local r, c = math.random(), 0
-    for _, e in ipairs(items) do
-        c += e.ch; if r <= c then
-            local cand = {}
-            for _, o in ipairs(pool) do if o.rarity == e.rar then cand[#cand+1] = o end end
-            if #cand > 0 then return cand[math.random(1, #cand)] end
+    local total = 0
+    for _, ore in ipairs(pool) do
+        local w = self:_oreWeight(ore)
+        if w > 0 then
+            total += w
+        end
+    end
+    if total <= 0 then
+        return pool[1]
+    end
+    local r = math.random() * total
+    local acc = 0
+    for _, ore in ipairs(pool) do
+        local w = self:_oreWeight(ore)
+        if w > 0 then
+            acc += w
+            if r <= acc then
+                return ore
+            end
         end
     end
     return pool[1]

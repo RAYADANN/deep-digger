@@ -68,7 +68,7 @@ function HUD:setDepth(depth: number, layerId: string?, layerName: string?)
     if not state then
         return
     end
-    HudStateModule.applyDepth(state, depth, layerId or "dirt", layerName or "Dirt Layer")
+    HudStateModule.applyDepth(state, depth, layerId or "dirt", layerName or "Grassland")
 end
 
 function HUD:setInventory(inventory: { PlayerDataMapper.InventoryEntry })

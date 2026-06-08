@@ -11,6 +11,7 @@ local FreezeDiagnostics = require(script.core.FreezeDiagnostics)
 local MiningRenderer = require(script.core.MiningRenderer)
 local DepthTracker = require(script.core.DepthTracker)
 local LayerEnvironment = require(script.core.LayerEnvironment)
+local Headlamp = require(script.core.Headlamp)
 local SoundManager = require(script.core.SoundManager)
 local CameraShake = require(script.core.CameraShake)
 local HUD = require(script.ui.HUD)
@@ -49,11 +50,13 @@ local renderer = MiningRenderer.new()
 local hud: HUD? = nil
 local depthTracker = DepthTracker.new(player)
 local layerEnvironment = LayerEnvironment.new()
+local headlamp = Headlamp.new()
 depthTracker:onChanged(function(info)
     if hud then
         hud:setDepth(info.depth, info.layerId, info.layerName)
     end
     layerEnvironment:apply(info.layerId)
+    headlamp:setDepth(info.depth)
     pcall(function()
         Net:Invoke("UpdateDepth", info.depth)
     end)
@@ -251,6 +254,8 @@ local function onCharacterAdded(character: Model)
     renderer:start()
     hud = HUD.new(player)
     layerEnvironment:reset()
+    -- Фонарик: персонаж новый на каждом респавне → привязываем заново.
+    headlamp:attach(character)
     depthTracker:start()
     -- Phase 8: HUD пересоздан → старые TutorialArrow-хэндлы указывают на
     -- destroyed-фреймы. Пересобираем стрелку под новый HUD. Если туториал
@@ -272,6 +277,7 @@ player.AncestryChanged:Connect(function()
     if player.Parent == nil then
         renderer:stop()
         depthTracker:stop()
+        headlamp:destroy()
         if hud then hud:destroy(); hud = nil end
         Tutorial.destroy()
         PetVisual.destroy()

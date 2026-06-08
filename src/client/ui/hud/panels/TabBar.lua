@@ -13,9 +13,10 @@ local TabBar = {}
 
 function TabBar.create(s: ScopeFactory.HudScope, state: HudStateModule.HudState)
     -- Phase 13: 8-й таб 📖 ЖУРНАЛ (retention — коллекция руд).
-    -- 8 * 58 + 7 * 6 = 506.
+    -- Phase 16: 9-й таб 🎯 ЦЕЛИ (квесты + достижения).
+    -- 9 * 58 + 8 * 6 = 570.
     return s:New("Frame")({
-        Size = UDim2.new(0, 506, 0, 72),
+        Size = UDim2.new(0, 570, 0, 72),
         Position = UDim2.new(0, 8, 1, -80),
         BackgroundTransparency = 1,
         [Children] = {
@@ -86,6 +87,13 @@ function TabBar.create(s: ScopeFactory.HudScope, state: HudStateModule.HudState)
                 icon = "📖",
                 label = "ЖУРНАЛ",
                 tabId = "journal",
+                activeTab = state.activeTab,
+                panelOpen = state.panelOpen,
+            }),
+            TabBtn.create(s, {
+                icon = "🎯",
+                label = "ЦЕЛИ",
+                tabId = "goals",
                 activeTab = state.activeTab,
                 panelOpen = state.panelOpen,
             }),

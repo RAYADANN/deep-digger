@@ -88,6 +88,30 @@ export type ServerPlayerPayload = {
     discoveredOres: { [string]: boolean }?,
     discoveredMilestones: { [string]: boolean }?,
     discoveryProgress: { found: number?, total: number? }?,
+    questActive: QuestActivePayload?,
+    questClaimedCount: number?,
+    questTotalCount: number?,
+    achievements: { AchievementPayload }?,
+}
+
+export type QuestActivePayload = {
+    id: string,
+    name: string,
+    desc: string,
+    metric: string?,
+    progress: number,
+    target: number,
+    claimable: boolean,
+    reward: { coins: number?, gems: number? },
+}
+
+export type AchievementPayload = {
+    id: string,
+    name: string,
+    description: string,
+    icon: string,
+    unlocked: boolean,
+    reward: { coins: number?, gems: number?, aura: string? },
 }
 
 export type MappedPlayerData = {
@@ -114,6 +138,10 @@ export type MappedPlayerData = {
     discoveredOres: { [string]: boolean },
     discoveredMilestones: { [string]: boolean },
     discoveryProgress: { found: number, total: number },
+    questActive: QuestActivePayload?,
+    questClaimedCount: number,
+    questTotalCount: number,
+    achievements: { AchievementPayload },
 }
 
 local PlayerDataMapper = {}
@@ -265,6 +293,10 @@ function PlayerDataMapper.fromServer(payload: ServerPlayerPayload): MappedPlayer
             found = (payload.discoveryProgress and payload.discoveryProgress.found) or 0,
             total = (payload.discoveryProgress and payload.discoveryProgress.total) or 0,
         },
+        questActive = payload.questActive,
+        questClaimedCount = payload.questClaimedCount or 0,
+        questTotalCount = payload.questTotalCount or 0,
+        achievements = if typeof(payload.achievements) == "table" then payload.achievements else {},
     }
 end
 

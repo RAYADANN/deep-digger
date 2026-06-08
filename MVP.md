@@ -5,8 +5,9 @@
 > **Архитектура:** 3D Neighbor Reveal (текущая). К вертикальной сетке 6×N не возвращаемся.
 > **Кто пишет код:** AI-агент в Cursor.
 > **Кто тестирует:** разработчик (Roblox Studio + Rojo).
-> **Статус:** Фазы 0–14 закрыты 🟢 (Фаза 5 ждёт плейтест-профайл; 12–14 ждут коммита; Фаза 14 — код готов, финальные PNG-ассеты грузит разработчик). Фаза 15 (soft launch) — 🔴.
+> **Статус:** Фазы 0–14 + 16 закрыты 🟢 (Фаза 5 ждёт плейтест-профайл; 12–14 + 16 ждут коммита; Фаза 14 — код готов, финальные PNG-ассеты грузит разработчик). Фаза 15 (soft launch) — 🔴.
 > **Обновлено:** 2026-06-03
+> **Scope-добавление (Фаза 16):** по запросу до soft-launch добавлены взвешенное распределение руды (Minecraft-style), цели/квесты + подключены достижения и фонарик игрока — игре нужна была понятная цель и видимость в шахте.
 
 ---
 
@@ -17,7 +18,7 @@
 - Боссы (в оригинальной игре их нет).
 - Trading между игроками (требует античита + UI, патч 1.1).
 - Гильдии / кланы (жирная фича, патч 1.2+).
-- Achievements как полноценная фича (модуль есть, но не подключаем — патч 1.1).
+- ~~Achievements~~ — **подключены в Фазе 16** (модуль `AchievementManager` + UI в табе 🎯 ЦЕЛИ).
 - Limited-time events (работают только когда есть аудитория).
 - NPC в шахте, сейсмические события, биом-вариации (атмосферные фичи на потом).
 - Mine Shafts как отдельная механика — используем уже реализованные **скрытые комнаты**.
@@ -44,6 +45,8 @@
 10. **Открыть журнал находок** (8-й таб 📖): видеть «???» до первой добычи, после удара — имя/иконка руды; при полном слое — milestone-монеты и тост.
 11. Играть 30+ минут подряд с **ощутимым «соком»** ударов (звуки, screen shake, particles) без утечек FPS.
 12. Получить **3 туториал-подсказки** в первые 30 секунд (клик → продай → купи кирку).
+13. **Видеть цель** (9-й таб 🎯 ЦЕЛИ): активный квест с прогрессом, забрать награду, разблокировать достижения — есть ради чего копать.
+14. Видеть в шахте вокруг себя (фонарик), при этом глубина остаётся атмосферно-тёмной.
 
 **Retention-принцип (не Pet Simulator):** цель охоты — **руда и слои глубины**, петы — инструмент. Без **Ore Discovery Index** нет долгосрочной мотивации «найти всё» → удержание падает.
 
@@ -83,6 +86,7 @@
 | 10 | 12 | ✅ Монетизация: 3–4 game-passes, 2–3 DevProducts (coin packs) |
 | 11 | **13** | **Ore Discovery Index**: 8-й таб 📖 ЖУРНАЛ, 30 руд, milestone за полный слой, переживает ребёрт |
 | 12 | 14 | Визуальный пасс: материалы по слоям, key art, иконка, thumbnail |
+| 12 | **16** | ✅ Распределение руды (взвешенный спавн) + Цели (квесты, достижения) + фонарик |
 | 13–14 | 15 | Soft launch: 2-player playtest, balance fixes, релиз unlisted → public |
 
 ---
@@ -372,6 +376,40 @@
 
 ---
 
+### █ Фаза 16 — Распределение руды + Цели 🟢
+
+**Цель:** дать шахте узнаваемое Minecraft-распределение руды (наполнитель доминирует, редкости — редки) и понятную цель/прогрессию — игроку должно быть ради чего копать. Плюс убрать жалобу «в шахте темно». Добавлено по запросу разработчика до soft-launch.
+
+**Распределение руды (Minecraft-style):**
+- [x] **`OreDef.weight`** в `shared/data/OreDatabase.lua` — вес спавна внутри слоя: наполнитель ~900, вторичные common 60–130, uncommon 14–30, rare 3–6, epic 2–4, legendary/mythic 1. `test_glow` weight=0 (не спавнится). В каждом слое доминирует «свой» наполнитель (Dirt ≈78% грязи).
+- [x] **`MiningEngine:_roll`** переписан на единый взвешенный ролл по пулу слоя (`_oreWeight` = `weight` или fallback `Constants.RARITY_DEFAULT_WEIGHT[rarity]`, `weight<=0` пропускается). Старый двухшаговый rarity-ролл убран.
+- [x] **`Constants.RARITY_DEFAULT_WEIGHT`** — fallback-веса для руд без явного `weight`.
+
+**Цели / квесты:**
+- [x] **`shared/util/QuestLogic.lua`** — единственный источник цепочки квестов (~10 шт), `metric` ∈ blocksMined / coinsEarned / depth / oresDiscovered / rebirths / shaftRooms. Прогресс выводится из существующих счётчиков профиля (без отдельного per-event трекинга). `activeQuest` / `isComplete` / `buildActivePayload` / `claimedCount` / `totalCount`.
+- [x] **`server/core/QuestManager.lua`** — DI (паттерн DiscoveryManager). `onProfileLoaded` (ensure `claimedQuests`), `evaluate` (тост «забери награду» один раз на квест), `claim` (валидирует активный+выполненный+незабранный, начисляет `reward.coins/gems`, `claimedQuests[id]=true`). DevHooks `devResetQuests` / `devCompleteActive`.
+- [x] **`playerData.claimedQuests`** — список забранных квестов, **не сбрасывается** при ребёрте.
+- [x] **UI** (`client/ui/hud/panels/GoalsPanel.lua`): 9-й таб 🎯 ЦЕЛИ — активный квест с прогресс-баром, наградой и кнопкой [ЗАБРАТЬ] (`Net:Invoke("ClaimQuest", id)`), «✅ Все цели выполнены!» в конце. `TabBar` → 9 табов (570px), `MainPanel` → GoalsPanel.
+- [x] **`Net:Handle("ClaimQuest")`** + хуки `questManager:evaluate` в MineBlock / processDepthUpdate / onEconomyChanged.
+
+**Достижения (подключение существующего модуля):**
+- [x] **`server/core/AchievementManager.lua`** — был заглушкой, подключён: персист в `playerData.unlockedAchievements`, `check` начисляет награды + тост `kind="achievement_unlocked"`. Починены заглушки `check` (`collector_10` → DiscoveryLogic, depth → `maxDepthReached`, `shaft_finder` → `shaftRoomCount`); `boss_slayer` `hidden=true` (боссов в MVP нет).
+- [x] **`playerData.unlockedAchievements`, `shaftRoomCount`** — персист, переживают ребёрт. `shaftRoomCount++` при `roomGenerated` в MineBlock.
+- [x] **UI**: список достижений в `GoalsPanel` (✓ для разблокированных, награда для остальных), `buildHudPayload` шлёт `achievements` (только видимые).
+
+**Фонарик (видимость в шахте):**
+- [x] **`client/core/Headlamp.lua`** — `PointLight` на `HumanoidRootPart` (fallback Head), тёплый белый, без теней (1 источник — дёшево). `setDepth(depth)` плавно повышает `Range`/`Brightness` с глубиной (поверхность 26/1.6 → void 42/3.0): рядом всегда видно, тьма остаётся вдали (атмосфера Фазы 14 сохранена).
+- [x] **`Constants.HEADLAMP`** — конфиг (color/baseRange/maxRange/baseBrightness/maxBrightness/fullPowerDepth/shadows).
+- [x] **Интеграция** (`init.client.lua`): `attach` в `onCharacterAdded`, `setDepth` в `depthTracker:onChanged`, `destroy` при выходе.
+
+- [x] **DevCommands**: `/resetquests`, `/completequest`.
+
+**Тест:** копать Dirt → доминирует грязь, редко руда; таб 🎯 → активный квест растёт, по выполнении тост + [ЗАБРАТЬ] → монеты + следующий квест; открыть 10 руд → ачивка `collector_10` + тост; фонарик освещает вокруг игрока, глубже — ярче; перезаход/ребёрт → квесты/достижения на месте. Полный smoke-чеклист — в `STATUS.md`.
+
+**Дата закрытия:** 2026-06-03 (ждёт Studio smoke + коммит).
+
+---
+
 ### █ Фаза 15 — Soft Launch & Стабилизация 🔴
 
 **Цель:** релиз с минимальным риском.
@@ -392,8 +430,8 @@
 
 **Патч 1.1** (через 2 недели после релиза):
 - Trading между игроками (P2P UI, античит).
-- Achievements (`AchievementManager` уже есть — подключить).
 - 2-й egg type (Gold Egg) + 5 новых питомцев.
+- Расширение цепочки квестов + новые достижения (база подключена в Фазе 16).
 
 **Патч 1.2** (через месяц):
 - Limestone Layer полировка (новые материалы, звуки, балансы).
@@ -412,7 +450,7 @@
 
 ## Примечания
 
-- Сейчас в `src/` ~11.8k строк в 74 файлах (после Фазы 10); ожидаемый объём к концу MVP — **~15–18k строк** (Pets MVP добавит ~1500–2000, Monetization ~800–1200, визуальный пасс ~500).
+- Сейчас в `src/` ~15k+ строк в ~95 файлах (после Фаз 12–14 + 16: +DiscoveryLogic/Manager, JournalPanel, OreEntry, OreDiscoveryFX, QuestLogic, QuestManager, GoalsPanel, Headlamp; AchievementManager подключён). Ожидаемый объём к концу MVP — **~15–18k строк**.
 - AI-агент пишет код фазами; разработчик — Studio, Rojo, плейтест, фидбек по чеклисту фазы.
 - Баланс настраиваем после первого 30-минутного прогона по чек-листу «MVP готов».
 - Звуки на MVP — бесплатная библиотека Roblox; кастомные ассеты — post-MVP.

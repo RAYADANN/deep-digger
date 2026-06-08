@@ -1,36 +1,42 @@
 --!strict
 -- AchievementManager.lua — отслеживание достижений игрока.
--- 
--- Универсальный: можно перенести в любой проект.
--- Подписывается на события из MiningEngine, EconomyManager и т.д.
--- При выполнении условия — разблокирует ачивку и вызывает колбэк.
+--
+-- Разблокировки персистятся в playerData.unlockedAchievements.
+-- Подписывается на события через check() после значимых действий.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local shared = ReplicatedStorage:WaitForChild("shared")
 local Signal = require(shared.util.Signal)
 local Logger = require(shared.util.Logger)
+local DiscoveryLogic = require(shared.util.DiscoveryLogic)
 
 local AchievementManager = {}
 AchievementManager.__index = AchievementManager
 
--- Типы
 export type Achievement = {
     id: string,
     name: string,
     description: string,
     icon: string,
-    reward: { coins?: number, gems?: number, aura?: string },
+    reward: { coins: number?, gems: number?, aura: string? },
     check: (playerData: any) -> boolean,
+    hidden: boolean?, -- future content — не показывать в UI
 }
 
-function AchievementManager.new()
+export type Deps = {
+    profileManager: any,
+    onProfileChanged: ((player: Player) -> ())?,
+    notify: ((player: Player, payload: any) -> ())?,
+}
+
+function AchievementManager.new(deps: Deps?)
     local self = setmetatable({}, AchievementManager)
     self._log = Logger.new("Achievements")
-    self.onAchievementUnlocked = Signal.new()  -- (player, achievementId) -> ()
-
+    self.onAchievementUnlocked = Signal.new()
+    self._profileManager = deps and deps.profileManager
+    self._onProfileChanged = deps and deps.onProfileChanged
+    self._notify = deps and deps.notify
     self._achievements = self:_buildList()
-    self._unlocked = {}  -- [userId] = { [achievementId] = true }
-
     self._log:info("AchievementManager initialized")
     return self
 end
@@ -41,102 +47,169 @@ function AchievementManager:_buildList(): { Achievement }
             id = "first_ore",
             name = "First Dig",
             description = "Mine your first ore",
-            icon = "",
+            icon = "⛏",
             reward = { coins = 100 },
-            check = function(data) return data.totalBlocksMined >= 1 end,
+            check = function(data) return (data.totalBlocksMined or 0) >= 1 end,
         },
         {
             id = "deep_100",
             name = "Getting Deeper",
             description = "Reach 100 meters depth",
-            icon = "",
+            icon = "⬇",
             reward = { coins = 500 },
-            check = function(data) return data.depth >= 100 end,
+            check = function(data) return (data.maxDepthReached or 0) >= 100 end,
         },
         {
             id = "deep_500",
             name = "Deep Diver",
             description = "Reach 500 meters depth",
-            icon = "",
+            icon = "🕳",
             reward = { coins = 2500, gems = 50 },
-            check = function(data) return data.depth >= 500 end,
+            check = function(data) return (data.maxDepthReached or 0) >= 500 end,
         },
         {
             id = "collector_10",
             name = "Collector",
-            description = "Mine 10 unique ore types",
-            icon = "",
+            description = "Discover 10 unique ore types",
+            icon = "📦",
             reward = { coins = 1000 },
-            check = function(data) return false end,  -- будет реализовано позже
+            check = function(data)
+                return DiscoveryLogic.totalProgress(data).found >= 10
+            end,
         },
         {
             id = "boss_slayer",
             name = "Boss Slayer",
             description = "Defeat your first boss",
-            icon = "",
+            icon = "👹",
             reward = { coins = 5000, gems = 100 },
-            check = function(data) return data.bossesDefeated >= 1 end,
+            check = function(data) return (data.bossesDefeated or 0) >= 1 end,
+            hidden = true,
         },
         {
             id = "millionaire",
             name = "Millionaire",
             description = "Earn 1,000,000 coins total",
-            icon = "",
+            icon = "💰",
             reward = { aura = "rainbow" },
-            check = function(data) return data.totalCoinsEarned >= 1000000 end,
+            check = function(data) return (data.totalCoinsEarned or 0) >= 1000000 end,
         },
         {
             id = "shaft_finder",
             name = "Shaft Explorer",
-            description = "Find 10 mine shafts",
-            icon = "",
+            description = "Find 10 hidden rooms",
+            icon = "✨",
             reward = { gems = 200 },
-            check = function(data) return false end,  -- будет реализовано позже
+            check = function(data) return (data.shaftRoomCount or 0) >= 10 end,
         },
     }
 end
 
---[[
-    Проверить все ачивки для игрока.
-    Вызывается после любого значимого события.
-]]
-function AchievementManager:check(player: Player, playerData: any)
-    local userId = player.UserId
-    if not self._unlocked[userId] then
-        self._unlocked[userId] = {}
-    end
-    local playerUnlocked = self._unlocked[userId]
+function AchievementManager:getAll(): { Achievement }
+    return self._achievements
+end
 
-    for _, achievement in ipairs(self._achievements) do
-        if not playerUnlocked[achievement.id] then
-            if achievement.check(playerData) then
-                playerUnlocked[achievement.id] = true
-                self.onAchievementUnlocked:fire(player, achievement.id)
-
-                -- Награда
-                local reward = achievement.reward
-                if reward.coins then
-                    playerData.coins = (playerData.coins or 0) + reward.coins
-                end
-                if reward.gems then
-                    playerData.gems = (playerData.gems or 0) + reward.gems
-                end
-
-                self._log:info("Achievement unlocked:", achievement.name, "- Player:", userId)
-            end
+function AchievementManager:getVisible(): { Achievement }
+    local out = {}
+    for _, a in ipairs(self._achievements) do
+        if not a.hidden then
+            table.insert(out, a)
         end
+    end
+    return out
+end
+
+function AchievementManager:getById(id: string): Achievement?
+    for _, a in ipairs(self._achievements) do
+        if a.id == id then
+            return a
+        end
+    end
+    return nil
+end
+
+local function ensureFields(data: any)
+    if typeof(data.unlockedAchievements) ~= "table" then
+        data.unlockedAchievements = {}
     end
 end
 
---[[
-    Загрузить разблокированные ачивки из профиля игрока.
-]]
-function AchievementManager:loadUnlocked(player: Player, achievementIds: { string })
-    local userId = player.UserId
-    self._unlocked[userId] = {}
-    for _, id in ipairs(achievementIds or {}) do
-        self._unlocked[userId][id] = true
+function AchievementManager:isUnlocked(data: any, achievementId: string): boolean
+    if not data or typeof(data.unlockedAchievements) ~= "table" then
+        return false
     end
+    return data.unlockedAchievements[achievementId] == true
+end
+
+function AchievementManager:loadUnlocked(player: Player)
+    local data = if self._profileManager then self._profileManager:getData(player) else nil
+    if data then
+        ensureFields(data)
+    end
+end
+
+function AchievementManager:check(player: Player, playerData: any): boolean
+    ensureFields(playerData)
+    local changed = false
+
+    for _, achievement in ipairs(self._achievements) do
+        if not self:isUnlocked(playerData, achievement.id) then
+            if achievement.check(playerData) then
+                playerData.unlockedAchievements[achievement.id] = true
+                changed = true
+                self.onAchievementUnlocked:fire(player, achievement.id)
+
+                local reward = achievement.reward
+                if reward.coins and reward.coins > 0 then
+                    playerData.coins = (playerData.coins or 0) + reward.coins
+                    playerData.totalCoinsEarned = (playerData.totalCoinsEarned or 0) + reward.coins
+                end
+                if reward.gems and reward.gems > 0 then
+                    playerData.gems = (playerData.gems or 0) + reward.gems
+                end
+
+                if self._notify then
+                    self._notify(player, {
+                        text = ("🏅 Достижение: %s!"):format(achievement.name),
+                        icon = achievement.icon,
+                        color = { r = 255, g = 210, b = 50 },
+                        duration = 4,
+                        kind = "achievement_unlocked",
+                        achievementId = achievement.id,
+                    })
+                end
+
+                self._log:info("Achievement unlocked:", achievement.name, "- Player:", player.UserId)
+            end
+        end
+    end
+
+    return changed
+end
+
+export type AchievementPayload = {
+    id: string,
+    name: string,
+    description: string,
+    icon: string,
+    unlocked: boolean,
+    reward: { coins: number?, gems: number?, aura: string? },
+}
+
+function AchievementManager:buildPayload(playerData: any): { AchievementPayload }
+    ensureFields(playerData)
+    local out: { AchievementPayload } = {}
+    for _, a in ipairs(self:getVisible()) do
+        table.insert(out, {
+            id = a.id,
+            name = a.name,
+            description = a.description,
+            icon = a.icon,
+            unlocked = self:isUnlocked(playerData, a.id),
+            reward = a.reward,
+        })
+    end
+    return out
 end
 
 return AchievementManager

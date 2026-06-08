@@ -78,6 +78,10 @@ export type HudState = {
     discoveredMilestones: any,
     discoveryFound: any,
     discoveryTotal: any,
+    questActive: any,
+    questClaimedCount: any,
+    questTotalCount: any,
+    achievements: any,
 }
 
 local HudState = {}
@@ -112,11 +116,32 @@ local function shallowTableEqual(a: { [string]: any }, b: { [string]: any }): bo
     return true
 end
 
+local function questActiveEqual(a: PlayerDataMapper.QuestActivePayload?, b: PlayerDataMapper.QuestActivePayload?): boolean
+    if a == nil and b == nil then return true end
+    if a == nil or b == nil then return false end
+    return a.id == b.id
+        and a.progress == b.progress
+        and a.target == b.target
+        and a.claimable == b.claimable
+        and a.name == b.name
+end
+
+local function achievementsEqual(a: { PlayerDataMapper.AchievementPayload }, b: { PlayerDataMapper.AchievementPayload }): boolean
+    if #a ~= #b then return false end
+    for i = 1, #a do
+        if a[i].id ~= b[i].id or a[i].unlocked ~= b[i].unlocked then
+            return false
+        end
+    end
+    return true
+end
+
 export type MiningHudDelta = {
     coins: number?,
     inventory: { PlayerDataMapper.InventoryEntry }?,
     totalBlocksMined: number?,
     totalCoinsEarned: number?,
+    questActive: PlayerDataMapper.QuestActivePayload?,
 }
 
 function HudState.create(scope: ScopeFactory.HudScope): HudState
@@ -127,7 +152,7 @@ function HudState.create(scope: ScopeFactory.HudScope): HudState
         gems = scope:Value(0),
         depth = scope:Value(0),
         layerId = scope:Value("dirt"),
-        layerName = scope:Value("Dirt Layer"),
+        layerName = scope:Value("Grassland"),
         inventory = scope:Value({} :: { PlayerDataMapper.InventoryEntry }),
         upgrades = scope:Value({} :: PlayerDataMapper.UpgradeLevels),
         panelOpen = scope:Value(false),
@@ -164,6 +189,10 @@ function HudState.create(scope: ScopeFactory.HudScope): HudState
         discoveredMilestones = scope:Value({} :: { [string]: boolean }),
         discoveryFound = scope:Value(0),
         discoveryTotal = scope:Value(0),
+        questActive = scope:Value(nil :: PlayerDataMapper.QuestActivePayload?),
+        questClaimedCount = scope:Value(0),
+        questTotalCount = scope:Value(0),
+        achievements = scope:Value({} :: { PlayerDataMapper.AchievementPayload }),
     }
 end
 
@@ -198,6 +227,11 @@ function HudState.applyMiningDelta(state: HudState, delta: MiningHudDelta)
         setIfDiff(state.statTotalCoins, delta.totalCoinsEarned)
         if prevTotal ~= delta.totalCoinsEarned then
             AnimatedNumber.tween(state.statTotalCoinsDisplay, delta.totalCoinsEarned, COIN_TWEEN_SECONDS)
+        end
+    end
+    if delta.questActive ~= nil then
+        if not questActiveEqual(peek(state.questActive), delta.questActive) then
+            state.questActive:set(delta.questActive)
         end
     end
 end
@@ -246,6 +280,14 @@ function HudState.applyServerPayload(state: HudState, payload: PlayerDataMapper.
     setIfDiff(state.discoveredMilestones, mapped.discoveredMilestones, shallowTableEqual)
     setIfDiff(state.discoveryFound, mapped.discoveryProgress.found)
     setIfDiff(state.discoveryTotal, mapped.discoveryProgress.total)
+    if not questActiveEqual(peek(state.questActive), mapped.questActive) then
+        state.questActive:set(mapped.questActive)
+    end
+    setIfDiff(state.questClaimedCount, mapped.questClaimedCount)
+    setIfDiff(state.questTotalCount, mapped.questTotalCount)
+    if not achievementsEqual(peek(state.achievements), mapped.achievements) then
+        state.achievements:set(mapped.achievements)
+    end
 end
 
 function HudState.applyDepth(state: HudState, depth: number, layerId: string, layerName: string)

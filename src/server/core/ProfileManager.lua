@@ -56,6 +56,8 @@ local DEFAULT_DATA = {
     bossesDefeated = 0,
     maxDepthReached = 0,
     shaftsFound = {},
+    -- Счётчик найденных скрытых комнат (для достижения shaft_finder).
+    shaftRoomCount = 0,
     playTime = 0,
     lastSave = 0,
     -- Phase 8: онбординг.
@@ -125,6 +127,10 @@ local DEFAULT_DATA = {
     --   discoveredMilestones: { [layerId] = true } — выданные награды за слой.
     discoveredOres = {},
     discoveredMilestones = {},
+    -- Цели / квесты: claimedQuests[id]=true после получения награды.
+    claimedQuests = {},
+    -- Достижения: unlockedAchievements[id]=true.
+    unlockedAchievements = {},
 }
 
 -- Создать ProfileStore

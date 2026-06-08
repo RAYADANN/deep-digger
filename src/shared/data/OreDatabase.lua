@@ -5,9 +5,13 @@
 --
 -- Поля:
 --   id, name, layer, rarity, hp, value, xp, color, icon  — обязательные.
+--   weight                                              — относительный вес спавна
+--     внутри слоя (Minecraft-style: наполнитель доминирует).
 --   dropsOil, isGeode                                   — старые опц. флаги.
---   material, reflectance, glow                         — визуал по слою
---   (Фаза 14: материалы; atlasIndex/meshId — задел под texture atlas).
+--   protrusion = "crystal"                              — low-poly кластер
+--     кристаллов поверх блока (самоцветы/мистические руды); строит рендер.
+--   material/reflectance/glow                           — больше не задаём
+--     (low-poly пас сделал блоки плоскими; meshId — задел под Blender-меши).
 --
 -- Добавление новой руды = одна правка ЭТОГО файла. Клиент сам подтянет
 -- цвет, редкость, иконку через client/core/OreLookup.
@@ -22,69 +26,77 @@ function OreDatabase.new()
 end
 
 function OreDatabase:_buildDatabase()
-    -- Phase 14 (визуальная идентичность): поля material / reflectance / glow
-    -- заполнены по дизайн-гайду слоёв. MiningRenderer:_createPart читает их с
-    -- приоритетом OreDef → fallback на ORE_VISUAL_BY_RARITY. Принцип «спуска
-    -- вглубь»: грязь/камень — матовые (Ground/Slate), металлы — Foil/Metal с
-    -- блеском, самоцветы — Glass + reflectance, мистические руды — шиммер Foil
-    -- (glow). Neon с блоков убран (лишняя нагрузка/bloom).
+    -- Low-poly пас: блоки рендерятся плоским материалом (SmoothPlastic) + лёгкий
+    -- цветовой джиттер на блок, чтобы стена не выглядела монолитом — это в
+    -- MiningRenderer. Шумные материалы (Ground/Slate/Metal/Foil) убраны: они
+    -- конфликтовали с low-poly картой. Поэтому здесь material/reflectance/glow
+    -- больше НЕ задаются — рендер сам делает всё плоским.
+    --
+    -- protrusion = "crystal" → у кристаллических руд (самоцветы/мистические)
+    -- рендер строит low-poly кластер шардов цвета руды поверх куба. Это «герой»-
+    -- момент редкой находки. Не-кристаллические редкие руды (fossil, oil) —
+    -- остаются плоскими. Позже шарды заменяются Blender-мешами через meshId.
+    --
+    -- Первый слой «dirt» (ID не меняем — завязан в прогрессии) теперь визуально
+    -- ТРАВА: наполнитель зелёный, под ним земля/камешки/корни.
+    --
+    -- weight: относительный вес спавна внутри слоя. Наполнитель ~900,
+    -- uncommon изредка, rare+ очень редко (как в Minecraft).
     return {
         dirt = {
-            { id = "dirt", name = "Dirt", layer = "dirt", rarity = "common", hp = 1, value = 1, xp = 1, color = Color3.fromRGB(139, 105, 20), icon = "🟫", material = Enum.Material.Ground },
-            { id = "pebble", name = "Pebble", layer = "dirt", rarity = "common", hp = 2, value = 2, xp = 1, color = Color3.fromRGB(160, 160, 160), icon = "⬜", material = Enum.Material.Rock },
-            { id = "clay", name = "Clay", layer = "dirt", rarity = "common", hp = 3, value = 3, xp = 2, color = Color3.fromRGB(196, 168, 130), icon = "🟤", material = Enum.Material.Mud },
-            { id = "coal", name = "Coal", layer = "dirt", rarity = "uncommon", hp = 5, value = 5, xp = 2, color = Color3.fromRGB(28, 28, 28), icon = "⬛", material = Enum.Material.Slate },
-            { id = "root", name = "Root", layer = "dirt", rarity = "common", hp = 4, value = 4, xp = 1, color = Color3.fromRGB(92, 58, 30), icon = "🌿", material = Enum.Material.Wood },
-            { id = "fossil", name = "Fossil", layer = "dirt", rarity = "rare", hp = 10, value = 15, xp = 5, color = Color3.fromRGB(232, 213, 176), icon = "🦴", material = Enum.Material.Sandstone, reflectance = 0.05 },
-            -- Тест Фазы 6: появится на поверхности (rarity=mythic, шанс 0.1%).
-            -- Проверяет, что добавление новой руды НЕ требует правок клиента.
-            -- Намеренно БЕЗ material/glow — проверяет fallback на ORE_VISUAL_BY_RARITY.
-            { id = "test_glow", name = "Test Glow", layer = "dirt", rarity = "mythic", hp = 1, value = 1000, xp = 1, color = Color3.fromRGB(255, 0, 255), icon = "🟪" },
+            { id = "dirt", name = "Grass", layer = "dirt", rarity = "common", weight = 900, hp = 1, value = 1, xp = 1, color = Color3.fromRGB(96, 158, 64), icon = "🟩" },
+            { id = "pebble", name = "Pebble", layer = "dirt", rarity = "common", weight = 90, hp = 2, value = 2, xp = 1, color = Color3.fromRGB(138, 146, 150), icon = "⬜" },
+            { id = "clay", name = "Clay", layer = "dirt", rarity = "common", weight = 70, hp = 3, value = 3, xp = 2, color = Color3.fromRGB(170, 134, 98), icon = "🟫" },
+            { id = "coal", name = "Coal", layer = "dirt", rarity = "uncommon", weight = 30, hp = 5, value = 5, xp = 2, color = Color3.fromRGB(46, 48, 58), icon = "⬛" },
+            { id = "root", name = "Root", layer = "dirt", rarity = "common", weight = 60, hp = 4, value = 4, xp = 1, color = Color3.fromRGB(112, 76, 44), icon = "🌿" },
+            { id = "fossil", name = "Fossil", layer = "dirt", rarity = "rare", weight = 6, hp = 10, value = 15, xp = 5, color = Color3.fromRGB(232, 222, 182), icon = "🦴" },
+            -- Тест Фазы 6: weight=0 — не спавнится в продакшене.
+            { id = "test_glow", name = "Test Glow", layer = "dirt", rarity = "mythic", weight = 0, hp = 1, value = 1000, xp = 1, color = Color3.fromRGB(255, 0, 255), icon = "🟪" },
         },
         stone = {
-            { id = "stone", name = "Stone", layer = "stone", rarity = "common", hp = 8, value = 6, xp = 3, color = Color3.fromRGB(128, 128, 128), icon = "🪨", material = Enum.Material.Slate },
-            { id = "copper", name = "Copper", layer = "stone", rarity = "common", hp = 10, value = 8, xp = 3, color = Color3.fromRGB(184, 115, 51), icon = "🟧", material = Enum.Material.Metal },
-            { id = "iron", name = "Iron", layer = "stone", rarity = "common", hp = 15, value = 15, xp = 5, color = Color3.fromRGB(193, 154, 107), icon = "⚙", material = Enum.Material.Metal },
-            { id = "silver", name = "Silver", layer = "stone", rarity = "uncommon", hp = 20, value = 25, xp = 7, color = Color3.fromRGB(192, 192, 192), icon = "⬡", material = Enum.Material.Foil },
-            { id = "gold", name = "Gold", layer = "stone", rarity = "uncommon", hp = 30, value = 40, xp = 10, color = Color3.fromRGB(255, 215, 0), icon = "★", material = Enum.Material.Foil },
-            { id = "sapphire", name = "Sapphire", layer = "stone", rarity = "rare", hp = 50, value = 80, xp = 15, color = Color3.fromRGB(15, 82, 186), icon = "◆", material = Enum.Material.Glass, reflectance = 0.25 },
-            { id = "ruby", name = "Ruby", layer = "stone", rarity = "rare", hp = 75, value = 120, xp = 20, color = Color3.fromRGB(224, 17, 95), icon = "♦", material = Enum.Material.Glass, reflectance = 0.25 },
+            { id = "stone", name = "Stone", layer = "stone", rarity = "common", weight = 900, hp = 8, value = 6, xp = 3, color = Color3.fromRGB(128, 128, 132), icon = "🪨" },
+            { id = "copper", name = "Copper", layer = "stone", rarity = "common", weight = 110, hp = 10, value = 8, xp = 3, color = Color3.fromRGB(188, 116, 56), icon = "🟧" },
+            { id = "iron", name = "Iron", layer = "stone", rarity = "common", weight = 70, hp = 15, value = 15, xp = 5, color = Color3.fromRGB(156, 150, 144), icon = "⚙" },
+            { id = "silver", name = "Silver", layer = "stone", rarity = "uncommon", weight = 22, hp = 20, value = 25, xp = 7, color = Color3.fromRGB(206, 212, 224), icon = "⬡" },
+            { id = "gold", name = "Gold", layer = "stone", rarity = "uncommon", weight = 14, hp = 30, value = 40, xp = 10, color = Color3.fromRGB(255, 208, 64), icon = "★" },
+            { id = "sapphire", name = "Sapphire", layer = "stone", rarity = "rare", weight = 5, hp = 50, value = 80, xp = 15, color = Color3.fromRGB(64, 128, 255), icon = "◆", protrusion = "crystal" },
+            { id = "ruby", name = "Ruby", layer = "stone", rarity = "rare", weight = 3, hp = 75, value = 120, xp = 20, color = Color3.fromRGB(235, 44, 76), icon = "♦", protrusion = "crystal" },
         },
         limestone = {
-            { id = "limestone", name = "Limestone", layer = "limestone", rarity = "common", hp = 20, value = 18, xp = 6, color = Color3.fromRGB(232, 213, 176), icon = "□", material = Enum.Material.Sandstone },
-            { id = "marble_chip", name = "Marble Chip", layer = "limestone", rarity = "common", hp = 35, value = 30, xp = 8, color = Color3.fromRGB(245, 245, 220), icon = "◇", material = Enum.Material.Marble },
-            { id = "malachite", name = "Malachite", layer = "limestone", rarity = "uncommon", hp = 60, value = 55, xp = 12, color = Color3.fromRGB(11, 218, 81), icon = "◈", material = Enum.Material.Marble },
-            { id = "topaz", name = "Topaz", layer = "limestone", rarity = "rare", hp = 80, value = 100, xp = 18, color = Color3.fromRGB(255, 200, 124), icon = "◉", material = Enum.Material.Glass, reflectance = 0.2 },
-            { id = "emerald", name = "Emerald", layer = "limestone", rarity = "epic", hp = 100, value = 150, xp = 25, color = Color3.fromRGB(80, 200, 120), icon = "◆", material = Enum.Material.Glass, reflectance = 0.3 },
+            { id = "limestone", name = "Limestone", layer = "limestone", rarity = "common", weight = 900, hp = 20, value = 18, xp = 6, color = Color3.fromRGB(224, 212, 182), icon = "□" },
+            { id = "marble_chip", name = "Marble Chip", layer = "limestone", rarity = "common", weight = 120, hp = 35, value = 30, xp = 8, color = Color3.fromRGB(232, 234, 230), icon = "◇" },
+            { id = "malachite", name = "Malachite", layer = "limestone", rarity = "uncommon", weight = 26, hp = 60, value = 55, xp = 12, color = Color3.fromRGB(24, 196, 104), icon = "◈" },
+            { id = "topaz", name = "Topaz", layer = "limestone", rarity = "rare", weight = 6, hp = 80, value = 100, xp = 18, color = Color3.fromRGB(255, 206, 96), icon = "◉", protrusion = "crystal" },
+            { id = "emerald", name = "Emerald", layer = "limestone", rarity = "epic", weight = 2, hp = 100, value = 150, xp = 25, color = Color3.fromRGB(40, 224, 120), icon = "◆", protrusion = "crystal" },
         },
         crimson = {
-            { id = "crimson_rock", name = "Crimson Rock", layer = "crimson", rarity = "common", hp = 50, value = 40, xp = 12, color = Color3.fromRGB(139, 0, 0), icon = "▪", material = Enum.Material.Basalt },
-            { id = "redstone", name = "Redstone", layer = "crimson", rarity = "common", hp = 80, value = 65, xp = 18, color = Color3.fromRGB(204, 51, 51), icon = "●", material = Enum.Material.Slate },
-            { id = "blood_opal", name = "Blood Opal", layer = "crimson", rarity = "uncommon", hp = 150, value = 180, xp = 30, color = Color3.fromRGB(227, 66, 52), icon = "◎", material = Enum.Material.Marble },
-            { id = "oil_deposit", name = "Oil Deposit", layer = "crimson", rarity = "uncommon", hp = 120, value = 0, xp = 20, color = Color3.fromRGB(59, 59, 59), icon = "▼", dropsOil = true, material = Enum.Material.Slate },
-            { id = "diamond", name = "Diamond", layer = "crimson", rarity = "epic", hp = 200, value = 400, xp = 50, color = Color3.fromRGB(185, 242, 255), icon = "◆", material = Enum.Material.Glass, reflectance = 0.4 },
-            { id = "fire_opal", name = "Fire Opal", layer = "crimson", rarity = "legendary", hp = 250, value = 600, xp = 75, color = Color3.fromRGB(255, 94, 0), icon = "◈", material = Enum.Material.Glass, reflectance = 0.35 },
+            { id = "crimson_rock", name = "Crimson Rock", layer = "crimson", rarity = "common", weight = 900, hp = 50, value = 40, xp = 12, color = Color3.fromRGB(142, 52, 52), icon = "▪" },
+            { id = "redstone", name = "Redstone", layer = "crimson", rarity = "common", weight = 130, hp = 80, value = 65, xp = 18, color = Color3.fromRGB(212, 62, 52), icon = "●" },
+            { id = "blood_opal", name = "Blood Opal", layer = "crimson", rarity = "uncommon", weight = 24, hp = 150, value = 180, xp = 30, color = Color3.fromRGB(226, 56, 104), icon = "◎" },
+            { id = "oil_deposit", name = "Oil Deposit", layer = "crimson", rarity = "uncommon", weight = 20, hp = 120, value = 0, xp = 20, color = Color3.fromRGB(40, 50, 56), icon = "▼", dropsOil = true },
+            { id = "diamond", name = "Diamond", layer = "crimson", rarity = "epic", weight = 3, hp = 200, value = 400, xp = 50, color = Color3.fromRGB(158, 238, 255), icon = "◆", protrusion = "crystal" },
+            { id = "fire_opal", name = "Fire Opal", layer = "crimson", rarity = "legendary", weight = 1, hp = 250, value = 600, xp = 75, color = Color3.fromRGB(255, 120, 30), icon = "◈", protrusion = "crystal" },
         },
         marble = {
-            { id = "marble", name = "Marble", layer = "marble", rarity = "common", hp = 80, value = 70, xp = 20, color = Color3.fromRGB(242, 242, 242), icon = "□", material = Enum.Material.Marble },
-            { id = "white_quartz", name = "White Quartz", layer = "marble", rarity = "common", hp = 120, value = 110, xp = 28, color = Color3.fromRGB(248, 248, 255), icon = "◇", material = Enum.Material.Marble },
-            { id = "calcite", name = "Calcite", layer = "marble", rarity = "uncommon", hp = 180, value = 200, xp = 40, color = Color3.fromRGB(232, 232, 232), icon = "○", material = Enum.Material.Marble },
-            { id = "moonstone", name = "Moonstone", layer = "marble", rarity = "rare", hp = 280, value = 500, xp = 70, color = Color3.fromRGB(58, 216, 255), icon = "◉", material = Enum.Material.Glass, reflectance = 0.3 },
-            { id = "astralite", name = "Astralite", layer = "marble", rarity = "legendary", hp = 400, value = 1200, xp = 120, color = Color3.fromRGB(177, 156, 217), icon = "✦", glow = true },
+            { id = "marble", name = "Marble", layer = "marble", rarity = "common", weight = 900, hp = 80, value = 70, xp = 20, color = Color3.fromRGB(236, 236, 238), icon = "□" },
+            { id = "white_quartz", name = "White Quartz", layer = "marble", rarity = "common", weight = 120, hp = 120, value = 110, xp = 28, color = Color3.fromRGB(234, 240, 250), icon = "◇" },
+            { id = "calcite", name = "Calcite", layer = "marble", rarity = "uncommon", weight = 24, hp = 180, value = 200, xp = 40, color = Color3.fromRGB(242, 232, 214), icon = "○" },
+            { id = "moonstone", name = "Moonstone", layer = "marble", rarity = "rare", weight = 5, hp = 280, value = 500, xp = 70, color = Color3.fromRGB(140, 224, 255), icon = "◉", protrusion = "crystal" },
+            { id = "astralite", name = "Astralite", layer = "marble", rarity = "legendary", weight = 1, hp = 400, value = 1200, xp = 120, color = Color3.fromRGB(200, 172, 255), icon = "✦", protrusion = "crystal" },
         },
         obsidian = {
-            { id = "obsidian", name = "Obsidian", layer = "obsidian", rarity = "common", hp = 150, value = 150, xp = 35, color = Color3.fromRGB(26, 26, 46), icon = "■", material = Enum.Material.Slate },
-            { id = "dark_quartz", name = "Dark Quartz", layer = "obsidian", rarity = "common", hp = 250, value = 300, xp = 55, color = Color3.fromRGB(45, 27, 78), icon = "◆", material = Enum.Material.Slate },
-            { id = "amethyst", name = "Amethyst", layer = "obsidian", rarity = "uncommon", hp = 400, value = 600, xp = 85, color = Color3.fromRGB(153, 102, 204), icon = "◈", material = Enum.Material.Marble },
-            { id = "spirit_shard", name = "Spirit Shard", layer = "obsidian", rarity = "rare", hp = 600, value = 1200, xp = 150, color = Color3.fromRGB(224, 176, 255), icon = "✦", glow = true },
-            { id = "shadow_gem", name = "Shadow Gem", layer = "obsidian", rarity = "epic", hp = 900, value = 2500, xp = 250, color = Color3.fromRGB(47, 0, 79), icon = "◆", material = Enum.Material.Glass, reflectance = 0.3 },
+            { id = "obsidian", name = "Obsidian", layer = "obsidian", rarity = "common", weight = 900, hp = 150, value = 150, xp = 35, color = Color3.fromRGB(38, 36, 54), icon = "■" },
+            { id = "dark_quartz", name = "Dark Quartz", layer = "obsidian", rarity = "common", weight = 120, hp = 250, value = 300, xp = 55, color = Color3.fromRGB(104, 76, 150), icon = "◆" },
+            { id = "amethyst", name = "Amethyst", layer = "obsidian", rarity = "uncommon", weight = 24, hp = 400, value = 600, xp = 85, color = Color3.fromRGB(172, 118, 224), icon = "◈", protrusion = "crystal" },
+            { id = "spirit_shard", name = "Spirit Shard", layer = "obsidian", rarity = "rare", weight = 5, hp = 600, value = 1200, xp = 150, color = Color3.fromRGB(228, 184, 255), icon = "✦", protrusion = "crystal" },
+            { id = "shadow_gem", name = "Shadow Gem", layer = "obsidian", rarity = "epic", weight = 2, hp = 900, value = 2500, xp = 250, color = Color3.fromRGB(152, 52, 212), icon = "◆", protrusion = "crystal" },
         },
         void = {
-            { id = "void_stone", name = "Void Stone", layer = "void", rarity = "common", hp = 300, value = 500, xp = 60, color = Color3.fromRGB(13, 0, 26), icon = "▪", material = Enum.Material.Basalt },
-            { id = "nebula_crystal", name = "Nebula Crystal", layer = "void", rarity = "uncommon", hp = 500, value = 1000, xp = 100, color = Color3.fromRGB(75, 0, 130), icon = "✦", glow = true },
-            { id = "star_fragment", name = "Star Fragment", layer = "void", rarity = "rare", hp = 800, value = 2500, xp = 200, color = Color3.fromRGB(255, 255, 153), icon = "★", glow = true },
-            { id = "galaxy_opal", name = "Galaxy Opal", layer = "void", rarity = "epic", hp = 1500, value = 6000, xp = 400, color = Color3.fromRGB(0, 0, 128), icon = "◎", material = Enum.Material.Glass, reflectance = 0.4 },
-            { id = "void_crystal", name = "Void Crystal", layer = "void", rarity = "mythic", hp = 2500, value = 10000, xp = 500, color = Color3.fromRGB(0, 0, 0), icon = "✦", glow = true },
+            { id = "void_stone", name = "Void Stone", layer = "void", rarity = "common", weight = 900, hp = 300, value = 500, xp = 60, color = Color3.fromRGB(36, 26, 56), icon = "▪" },
+            { id = "nebula_crystal", name = "Nebula Crystal", layer = "void", rarity = "uncommon", weight = 90, hp = 500, value = 1000, xp = 100, color = Color3.fromRGB(134, 62, 198), icon = "✦", protrusion = "crystal" },
+            { id = "star_fragment", name = "Star Fragment", layer = "void", rarity = "rare", weight = 14, hp = 800, value = 2500, xp = 200, color = Color3.fromRGB(255, 242, 168), icon = "★", protrusion = "crystal" },
+            { id = "galaxy_opal", name = "Galaxy Opal", layer = "void", rarity = "epic", weight = 4, hp = 1500, value = 6000, xp = 400, color = Color3.fromRGB(74, 84, 228), icon = "◎", protrusion = "crystal" },
+            { id = "void_crystal", name = "Void Crystal", layer = "void", rarity = "mythic", weight = 1, hp = 2500, value = 10000, xp = 500, color = Color3.fromRGB(198, 96, 255), icon = "✦", protrusion = "crystal" },
         },
     }
 end

@@ -44,6 +44,10 @@ export type Deps = {
     --   /discoverall       — открыть все руды (тест журнала).
     --   /resetjournal      — сбросить журнал.
     discoveryManager: any?,
+    -- Цели: QuestManager.
+    --   /resetquests       — сбросить цепочку квестов.
+    --   /completequest     — выполнить активный квест (dev).
+    questManager: any?,
 }
 
 local DevCommands = {}
@@ -77,6 +81,7 @@ function DevCommands.new(deps: Deps)
     self._petManager = deps.petManager
     self._monetizationManager = deps.monetizationManager
     self._discoveryManager = deps.discoveryManager
+    self._questManager = deps.questManager
 
     if not isStudio() then
         self._log:info("DevCommands disabled (not Studio)")
@@ -415,6 +420,28 @@ function DevCommands:_handleResetJournal(player: Player)
     self:_notifyPlayer(player, "Журнал сброшен")
 end
 
+function DevCommands:_handleResetQuests(player: Player)
+    if not self._questManager then
+        self:_notifyPlayer(player, "QuestManager не подключён")
+        return
+    end
+    self._questManager:devResetQuests(player)
+    self:_notifyPlayer(player, "Квесты сброшены")
+end
+
+function DevCommands:_handleCompleteQuest(player: Player)
+    if not self._questManager then
+        self:_notifyPlayer(player, "QuestManager не подключён")
+        return
+    end
+    local ok = self._questManager:devCompleteActive(player)
+    if not ok then
+        self:_notifyPlayer(player, "Нет активного квеста")
+        return
+    end
+    self:_notifyPlayer(player, "Активный квест выполнен (забери награду)")
+end
+
 function DevCommands:_handleSkipTutorial(player: Player)
     -- Принудительно завершает туториал на сервере (tutorialStep = 3).
     -- Удобно для тестов, когда нужно проверить не-онбординг-фичу, но
@@ -431,7 +458,7 @@ end
 
 function DevCommands:_handleHelp(player: Player)
     self:_notifyPlayer(player,
-        "/coins [N], /reset, /maxlvl <id>, /skiptut, /rebirth [N], /daily, /setday +N, /resetdaily, /boost <мин>, /leaderboard refresh, /egg [N], /hatch, /pet <id>, /clearpets, /grantpass <key>, /grantproduct <key> [N], /discover <id>, /discoverall, /resetjournal"
+        "/coins [N], /reset, /maxlvl <id>, /skiptut, /rebirth [N], /daily, /setday +N, /resetdaily, /boost <мин>, /leaderboard refresh, /egg [N], /hatch, /pet <id>, /clearpets, /grantpass <key>, /grantproduct <key> [N], /discover <id>, /discoverall, /resetjournal, /resetquests, /completequest"
     )
 end
 
@@ -481,6 +508,10 @@ function DevCommands:_dispatch(player: Player, msg: string)
         self:_handleDiscoverAll(player)
     elseif cmd == "/resetjournal" then
         self:_handleResetJournal(player)
+    elseif cmd == "/resetquests" then
+        self:_handleResetQuests(player)
+    elseif cmd == "/completequest" then
+        self:_handleCompleteQuest(player)
     elseif cmd == "/devhelp" then
         self:_handleHelp(player)
     end

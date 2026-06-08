@@ -14,6 +14,7 @@ export type OreDef = {
     xp: number,
     color: Color3,
     icon: string,      -- emoji сейчас, rbxassetid://... после визуального паса
+    weight: number?,   -- относительный вес спавна внутри слоя (наполнитель ~900)
     dropsOil: boolean?,
     isGeode: boolean?,
     -- Визуальная идентичность (Фаза 14): material/reflectance/glow заполнены
@@ -25,6 +26,11 @@ export type OreDef = {
     atlasIndex: number?,         -- индекс ячейки в общем texture atlas
     meshId: string?,             -- rbxassetid://... для hero-ассетов (сундуки)
     glow: boolean?,              -- шиммер-материал (Foil) для мистических руд; Neon с блоков убран (нагрузка/bloom)
+    -- Low-poly пас: тип «нароста» поверх куба для редких/кристаллических руд.
+    -- "crystal" → рендер строит кластер low-poly шардов (Glass/Neon) цвета руды
+    -- как child'ов блока (удаляются вместе с ним). Позже здесь же можно отдавать
+    -- кастомные Blender-меши через meshId. nil = обычный плоский блок.
+    protrusion: string?,
 }
 
 export type OreInstance = {
@@ -141,6 +147,9 @@ export type PlayerData = {
     --                          milestone-награда (защита от двойного грантa).
     discoveredOres: { [string]: boolean },
     discoveredMilestones: { [string]: boolean },
+    claimedQuests: { [string]: boolean },
+    unlockedAchievements: { [string]: boolean },
+    shaftRoomCount: number,
 }
 
 export type UpgradeDef = {

@@ -27,6 +27,9 @@ local PetLogic = require(shared.util.PetLogic)
 local MonetizationManager = require(script.core.MonetizationManager)
 local DiscoveryManager = require(script.core.DiscoveryManager)
 local DiscoveryLogic = require(shared.util.DiscoveryLogic)
+local QuestManager = require(script.core.QuestManager)
+local QuestLogic = require(shared.util.QuestLogic)
+local AchievementManager = require(script.core.AchievementManager)
 
 local log = Logger.new("Server:Init")
 
@@ -163,6 +166,10 @@ end
 -- Phase 10: shared/util модули — формулы для daily-стейта в payload'е.
 local DailyLogic = require(shared.util.DailyLogic)
 
+-- Forward-declare: buildHudPayload / onEconomyChanged вызываются до конструкции.
+local achievementManager: any = nil
+local questManager: any = nil
+
 local function buildHudPayload(playerData)
     local invList = {}
     for oreId, count in pairs(playerData.inventory or {}) do
@@ -194,7 +201,7 @@ local function buildHudPayload(playerData)
     local activeBoostsPayload = PlayerBoosts.toPayloadList(playerData.activeBoosts)
     return {
         coins = playerData.coins or 0,
-        gems = 0,
+        gems = playerData.gems or 0,
         inventory = invList,
         pickaxeLevel = playerData.pickaxeLevel or 1,
         speedLevel = playerData.speedLevel or 1,
@@ -244,6 +251,11 @@ local function buildHudPayload(playerData)
         discoveredOres = playerData.discoveredOres or {},
         discoveredMilestones = playerData.discoveredMilestones or {},
         discoveryProgress = DiscoveryLogic.totalProgress(playerData),
+        -- Цели: активный квест + достижения.
+        questActive = QuestLogic.buildActivePayload(playerData),
+        questClaimedCount = QuestLogic.claimedCount(playerData),
+        questTotalCount = QuestLogic.totalCount(),
+        achievements = if achievementManager then achievementManager:buildPayload(playerData) else {},
     }
 end
 
@@ -280,6 +292,7 @@ local function syncMiningHud(player: Player)
         inventory = buildInventoryList(playerData),
         totalBlocksMined = playerData.totalBlocksMined or 0,
         totalCoinsEarned = playerData.totalCoinsEarned or 0,
+        questActive = QuestLogic.buildActivePayload(playerData),
     })
 end
 
@@ -310,6 +323,8 @@ local function processDepthUpdate(player: Player, depth: number)
     local record = playerData.maxDepthReached or 0
     if depth > record then
         playerData.maxDepthReached = depth
+        achievementManager:check(player, playerData)
+        questManager:evaluate(player)
         syncPlayerHud(player)
     end
 end
@@ -333,6 +348,11 @@ local leaderboard = Leaderboard.new({
 -- Обёртку держим тут (а не в EconomyManager), чтобы EconomyManager не
 -- знал про лидерборд (изоляция Phase 3).
 local function onEconomyChanged(player: Player)
+    local data = profileManager:getData(player)
+    if data and achievementManager and questManager then
+        achievementManager:check(player, data)
+        questManager:evaluate(player)
+    end
     syncPlayerHud(player)
     leaderboard:writeIfChanged(player)
 end
@@ -399,6 +419,19 @@ local discoveryManager = DiscoveryManager.new({
     notify = notify,
 })
 
+achievementManager = AchievementManager.new({
+    profileManager = profileManager,
+    onProfileChanged = onEconomyChanged,
+    notify = notify,
+})
+
+questManager = QuestManager.new({
+    profileManager = profileManager,
+    onProfileChanged = onEconomyChanged,
+    notify = notify,
+    notifyOnce = notifyOnce,
+})
+
 DevCommands.new({
     profileManager = profileManager,
     onEconomyChanged = syncPlayerHud,
@@ -410,6 +443,7 @@ DevCommands.new({
     petManager = petManager,
     monetizationManager = monetizationManager,
     discoveryManager = discoveryManager,
+    questManager = questManager,
 })
 
 --[[
@@ -433,6 +467,7 @@ Net:Handle("MineBlock", function(player: Player, clicks: { { x: number, z: numbe
     local results = {}
     local blocksChanged = false
     local discoveryChanged = false
+    local shaftFound = false
     local deltaAgg = newDeltaAgg()
 
     for _, click in ipairs(clicks) do
@@ -485,6 +520,8 @@ Net:Handle("MineBlock", function(player: Player, clicks: { { x: number, z: numbe
                 })
             end
             if result.roomGenerated then
+                playerData.shaftRoomCount = (playerData.shaftRoomCount or 0) + 1
+                shaftFound = true
                 local roomText
                 local roomColor
                 if result.roomRarity then
@@ -517,14 +554,27 @@ Net:Handle("MineBlock", function(player: Player, clicks: { { x: number, z: numbe
     end
 
     flushDelta(player, deltaAgg)
-    if discoveryChanged then
-        -- Редкое событие (новая руда) — нужны discovery-поля, шлём полный HUD.
+    local achChanged = achievementManager:check(player, playerData)
+    local questReady = questManager:evaluate(player)
+    if discoveryChanged or achChanged or questReady or shaftFound then
         syncPlayerHud(player)
     elseif blocksChanged then
         syncMiningHud(player)
     end
 
     return results
+end)
+
+Net:Handle("ClaimQuest", function(player: Player, questId: string)
+    if typeof(questId) ~= "string" or questId == "" then
+        return { success = false, error = "Invalid quest" }
+    end
+    local result = questManager:claim(player, questId)
+    if result.success then
+        achievementManager:check(player, profileManager:getData(player))
+        questManager:evaluate(player)
+    end
+    return result
 end)
 
 --[[
@@ -582,6 +632,10 @@ local function onPlayerAdded(player: Player)
     -- 3g. Phase 13: ensure журнал находок + бэкфилл из инвентаря (миграция).
     discoveryManager:onProfileLoaded(player)
 
+    -- 3h. Цели: квесты + достижения.
+    questManager:onProfileLoaded(player)
+    achievementManager:loadUnlocked(player)
+
     -- 4. Полный snapshot блоков для начального состояния клиента
     sendBlocksSnapshot(player)
 
@@ -624,6 +678,7 @@ local function onPlayerRemoving(player: Player)
     end
     -- Phase 10: финальная запись в лидерборд + cleanup throttle-state.
     leaderboard:onPlayerLeaving(player)
+    questManager:onPlayerLeaving(player)
     profileManager:saveProfile(player)
     antiCheat:reset(player)
     miningEngine:resetPlayer(player)

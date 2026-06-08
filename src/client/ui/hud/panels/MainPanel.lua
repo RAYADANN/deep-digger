@@ -14,6 +14,7 @@ local LeaderboardPanel = require(script.Parent.LeaderboardPanel)
 local PetsPanel = require(script.Parent.PetsPanel)
 local ShopPanel = require(script.Parent.ShopPanel)
 local JournalPanel = require(script.Parent.JournalPanel)
+local GoalsPanel = require(script.Parent.GoalsPanel)
 
 local OnEvent = Fusion.OnEvent
 local Children = Fusion.Children
@@ -71,6 +72,8 @@ function MainPanel.create(s: ScopeFactory.HudScope, state: HudStateModule.HudSta
                                 return "🛒 МАГАЗИН"
                             elseif tab == "journal" then
                                 return "📖 ЖУРНАЛ НАХОДОК"
+                            elseif tab == "goals" then
+                                return "🎯 ЦЕЛИ"
                             end
                             return "СТАТИСТИКА"
                         end),
@@ -113,6 +116,7 @@ function MainPanel.create(s: ScopeFactory.HudScope, state: HudStateModule.HudSta
                     PetsPanel.create(s, state),
                     ShopPanel.create(s, state),
                     JournalPanel.create(s, state),
+                    GoalsPanel.create(s, state),
                 },
             }),
         },

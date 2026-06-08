@@ -6,7 +6,7 @@ local Constants = {}
 export type LayerId = "dirt" | "stone" | "limestone" | "crimson" | "marble" | "obsidian" | "void"
 
 Constants.LAYERS = {
-    { id = "dirt" :: LayerId, name = "Dirt Layer", depthStart = 0, depthEnd = 49, bgColor = Color3.fromRGB(92, 58, 30), blockColor = Color3.fromRGB(139, 105, 20) },
+    { id = "dirt" :: LayerId, name = "Grassland", depthStart = 0, depthEnd = 49, bgColor = Color3.fromRGB(150, 190, 120), blockColor = Color3.fromRGB(96, 158, 64) },
     { id = "stone" :: LayerId, name = "Stone Layer", depthStart = 50, depthEnd = 149, bgColor = Color3.fromRGB(74, 74, 74), blockColor = Color3.fromRGB(128, 128, 128) },
     { id = "limestone" :: LayerId, name = "Limestone Layer", depthStart = 150, depthEnd = 299, bgColor = Color3.fromRGB(212, 197, 169), blockColor = Color3.fromRGB(232, 213, 176) },
     { id = "crimson" :: LayerId, name = "Crimson Layer", depthStart = 300, depthEnd = 499, bgColor = Color3.fromRGB(74, 0, 0), blockColor = Color3.fromRGB(139, 0, 0) },
@@ -29,6 +29,33 @@ Constants.LAYER_LIGHTING = {
     void      = { brightness = 0.35, clockTime = 0.0,  fogEnd = 300, atmosphereDensity = 0.60, atmosphereHaze = 3.0 },
 }
 
+-- Шахтёрский фонарик (client/core/Headlamp). PointLight на персонаже —
+-- всегда освещает блоки рядом, не убивая атмосферу «спуска во тьму».
+-- baseRange/baseBrightness — на поверхности; глубже свет чуть ярче и дальше
+-- (depthBonus * нормализованная глубина), чтобы во тьме void было видно.
+-- Один источник света — дёшево по перфу (важно после фикса фризов).
+Constants.HEADLAMP = {
+    enabled = false, -- выкл: свет перенесён на курсор (CURSOR_LIGHT)
+    color = Color3.fromRGB(255, 244, 214), -- тёплый белый, как лампа накаливания
+    baseRange = 26,
+    maxRange = 42,
+    baseBrightness = 1.6,
+    maxBrightness = 3.0,
+    -- глубина (в метрах), на которой фонарик достигает max-значений
+    fullPowerDepth = 1200,
+    shadows = false, -- тени дороги; держим выкл для производительности
+}
+
+-- Свет фонарика на курсоре (client/core/MiningRenderer). Небольшой PointLight
+-- следует за лучом мыши в шахте — освещает блок под прицелом, не персонажа.
+Constants.CURSOR_LIGHT = {
+    brightness = 0.85,
+    range = 11,
+    color = Color3.fromRGB(255, 248, 230),
+    -- если луч не попал в блок — свет вдоль луча на этой дистанции (студы)
+    fallbackDistance = 14,
+}
+
 Constants.BLOCK_SIZE_STUDS = 4.5
 Constants.SURFACE_W = 15
 Constants.SURFACE_D = 15
@@ -38,6 +65,15 @@ Constants.SHAFT_D = 5
 Constants.SHAFT_H = 5
 
 Constants.RARITY_CHANCES = { common = 0.50, uncommon = 0.30, rare = 0.15, epic = 0.04, legendary = 0.009, mythic = 0.001 }
+-- Fallback-вес спавна по rarity, если у руды нет явного weight в OreDatabase.
+Constants.RARITY_DEFAULT_WEIGHT = {
+    common = 100,
+    uncommon = 22,
+    rare = 5,
+    epic = 1.2,
+    legendary = 0.3,
+    mythic = 0.08,
+}
 Constants.RARITY_COLORS = {
     common = Color3.fromRGB(180, 180, 180),
     uncommon = Color3.fromRGB(100, 200, 100),

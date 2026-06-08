@@ -167,18 +167,18 @@ type RarityVisual = {
 -- динамических источников света в тоннеле, Roblox такое не тянет. rare сохраняет
 -- телеграф через материал/reflectance + sparkle. Свет epic+ дополнительно
 -- ограничен MAX_RARITY_GLOWS (см. ниже) от накопления за длинную сессию.
+-- Low-poly пас: ВСЕ блоки плоские (SmoothPlastic, reflectance 0) — шумные
+-- материалы убраны, чтобы куб сливался с low-poly картой. Глубина/ценность
+-- телеграфятся не материалом куба, а: (1) цветом руды, (2) кристаллами-
+-- наростами (protrusion) и (3) PointLight-аурой epic+. Sparkle-частицы с
+-- блоков убраны (их роль взяли кристаллы) — минус постоянные эмиттеры.
 local ORE_VISUAL_BY_RARITY: { [string]: RarityVisual } = {
-    -- common/uncommon: reflectance = 0 — отражения сэмплят окружение каждый кадр,
-    -- а это ~80% всех блоков. Блеск оставлен только rare+ (телеграф ценности).
-    common = { material = Enum.Material.Slate, reflectance = 0.0, light = nil, pulse = false, sparkleRate = 0 },
-    uncommon = { material = Enum.Material.Rock, reflectance = 0.0, light = nil, pulse = false, sparkleRate = 0 },
-    -- sparkleRate: rare = 0 (это ~15% блоков → сотни вечных эмиттеров). Sparkle
-    -- оставлен только epic+ и снижен — постоянные ParticleEmitter'ы крутятся
-    -- каждый кадр даже без кликов. rare телеграфится материалом Marble.
-    rare = { material = Enum.Material.Marble, reflectance = 0.16, light = nil, pulse = false, sparkleRate = 0 },
-    epic = { material = Enum.Material.Glass, reflectance = 0.28, light = { range = 8, brightness = 1.1 }, pulse = false, sparkleRate = 1.5 },
-    legendary = { material = Enum.Material.Foil, reflectance = 0.4, light = { range = 10, brightness = 1.7 }, pulse = true, sparkleRate = 2.5 },
-    mythic = { material = Enum.Material.Foil, reflectance = 0.0, light = { range = 13, brightness = 2.4 }, pulse = true, sparkleRate = 4 },
+    common = { material = Enum.Material.SmoothPlastic, reflectance = 0.0, light = nil, pulse = false, sparkleRate = 0 },
+    uncommon = { material = Enum.Material.SmoothPlastic, reflectance = 0.0, light = nil, pulse = false, sparkleRate = 0 },
+    rare = { material = Enum.Material.SmoothPlastic, reflectance = 0.0, light = nil, pulse = false, sparkleRate = 0 },
+    epic = { material = Enum.Material.SmoothPlastic, reflectance = 0.0, light = { range = 8, brightness = 1.0 }, pulse = false, sparkleRate = 0 },
+    legendary = { material = Enum.Material.SmoothPlastic, reflectance = 0.0, light = { range = 10, brightness = 1.6 }, pulse = true, sparkleRate = 0 },
+    mythic = { material = Enum.Material.SmoothPlastic, reflectance = 0.0, light = { range = 13, brightness = 2.2 }, pulse = true, sparkleRate = 0 },
 }
 
 local DEFAULT_VISUAL: RarityVisual = ORE_VISUAL_BY_RARITY.common
@@ -186,6 +186,66 @@ local DEFAULT_VISUAL: RarityVisual = ORE_VISUAL_BY_RARITY.common
 -- Жёсткий кап на одновременные rarity-PointLight'ы. Даже epic+ копятся за
 -- сессию (раскопанные стены не выгружаются); без капа это сотни источников.
 local MAX_RARITY_GLOWS = 40
+
+-- ===== Low-poly restyle helpers =====
+-- Цветовой джиттер: лёгкий разброс яркости/тона на блок, чтобы стена из
+-- одинаковых кубов не выглядела пластиковым монолитом (ключевой low-poly приём).
+local JITTER_V = 0.06
+local JITTER_H = 0.015
+local function jitterColor(c: Color3): Color3
+    local h, s, v = c:ToHSV()
+    h = (h + (math.random() - 0.5) * 2 * JITTER_H) % 1
+    v = math.clamp(v + (math.random() - 0.5) * 2 * JITTER_V, 0, 1)
+    return Color3.fromHSV(h, s, v)
+end
+local function darkenColor(c: Color3, a: number): Color3 return c:Lerp(Color3.new(0, 0, 0), a) end
+local function brightenColor(c: Color3, a: number): Color3 return c:Lerp(Color3.new(1, 1, 1), a) end
+local function lumOf(c: Color3): number return c.R * 0.299 + c.G * 0.587 + c.B * 0.114 end
+local function smoothSurfaces(p: BasePart)
+    -- Плоские грани без Studs/Inlet: на SmoothPlastic стандартные грани вылезают
+    -- «пупырышками» и убивают low-poly вид.
+    p.TopSurface = Enum.SurfaceType.Smooth
+    p.BottomSurface = Enum.SurfaceType.Smooth
+    p.LeftSurface = Enum.SurfaceType.Smooth
+    p.RightSurface = Enum.SurfaceType.Smooth
+    p.FrontSurface = Enum.SurfaceType.Smooth
+    p.BackSurface = Enum.SurfaceType.Smooth
+end
+
+-- Кристаллы-наросты по rarity. Glass для rare/epic, Neon для legendary/mythic
+-- (светятся как акценты на low-poly карте). Кол-во/масштаб растут с редкостью.
+local CRYSTAL_BY_RARITY: { [string]: { shards: number, scale: number, mat: Enum.Material, refl: number } } = {
+    uncommon = { shards = 2, scale = 0.8, mat = Enum.Material.Glass, refl = 0.12 },
+    rare = { shards = 3, scale = 0.95, mat = Enum.Material.Glass, refl = 0.18 },
+    epic = { shards = 4, scale = 1.1, mat = Enum.Material.Glass, refl = 0.28 },
+    legendary = { shards = 5, scale = 1.25, mat = Enum.Material.Neon, refl = 0.0 },
+    mythic = { shards = 6, scale = 1.45, mat = Enum.Material.Neon, refl = 0.0 },
+}
+-- Кап на блоки с наростами одновременно (как MAX_RARITY_GLOWS). Сами шарды
+-- дешёвые (anchored, massless, без света), но uncommon-кристаллы (амётист,
+-- небула) могут встречаться часто в глубоких слоях — ограничиваем на всякий.
+-- Накидка-меш = 1 part на блок (дешевле старых шардов), но висит на ВСЕХ
+-- не-наполнителях (их больше) — поэтому кап выше.
+local MAX_PROTRUSIONS = 250
+
+-- ===== Накидка (Blender-меш поверх руды) =====
+-- Меш «Version1» (Kit): тонкая изогнутая обшивка-кластер гранёных кристаллов,
+-- которая ложится на грань блока. Вешается на ВСЕ не-наполнительные руды цветом
+-- руды (кристалл светлее породы; порода = цвет руды затемнён в _createPart).
+-- legendary/mythic получают Neon-грани (светятся в темноте). Рендерим через
+-- SpecialMesh (FileMesh) — работает в рантайме без AssetService-yield'ов.
+local SHELL_MESH_ID = "rbxassetid://71939651950188"
+-- ВАЖНО: SpecialMesh.Scale множит СЫРУЮ геометрию меша, а не размер MeshPart.
+-- Сырой bbox этого ассета ~13.7×135.7×175.2 студа (импортный масштаб ~43.9×),
+-- поэтому Scale=1 дал бы накидку на пол-карты. Чтобы накидка вышла ~0.33×3.26×4.2
+-- студа (грань блока 4.5) — масштаб ~0.024 (= 1.05 / 43.9).
+local SHELL_SCALE = 0.024
+-- Насколько кристалл светлее цвета руды (порода = тот же цвет, но темнее).
+local SHELL_BRIGHTEN = 0.12
+-- Наполнитель слоя определяем по весу спавна (наполнитель = 900; всё ниже — руда).
+local FILLER_WEIGHT = 300
+-- Свечение граней с этих редкостей.
+local SHELL_NEON_RARITY: { [string]: boolean } = { legendary = true, mythic = true }
 
 -- Shockwave: расширяющаяся neon-сфера. Это "ударная волна" в точке разрушения.
 -- Полностью локальный эффект — никаких ScreenGui, никаких CC-эффектов.
@@ -392,10 +452,13 @@ function MiningRenderer.new()
     self._parts = {}; self._blockData = {}; self._parent = nil; self._enabled = false
     self._showRarity = false; self._showHPBar = true
     self._activeGlows = 0 -- счётчик живых rarity-PointLight'ов (кап MAX_RARITY_GLOWS)
+    self._activeProtrusions = 0 -- счётчик блоков с кристаллами-наростами (кап MAX_PROTRUSIONS)
     self._lastSwingAt = 0
     self._swingDelay = UpgradeLogic.swingDelaySeconds(1)
     self._log = Logger.new("MiningRenderer")
     self._hoveredKey = nil :: string?
+    self._cursorLightHost = nil :: BasePart?
+    self._cursorLight = nil :: PointLight?
     self._rayParams = nil :: RaycastParams?
     self._inputConn = nil :: RBXScriptConnection?
     self._hoverConn = nil :: RBXScriptConnection?
@@ -406,7 +469,38 @@ function MiningRenderer.new()
     self._createConn = nil :: RBXScriptConnection?
     self._syncConn = nil :: RBXScriptConnection?
     self._gen = 0 -- поколение (см. _isStale); проставляется в start()
+    self._origin = nil :: Vector3? -- мировой центр шахты, кэш (см. _mineOrigin)
     return self
+end
+
+--[[
+    Опорная точка шахты = зона workspace.MineZoneMarker. Координата блока (0,0,0)
+    кладётся в ВЕРХ-ЦЕНТР коробки MineZoneMarker.Volume:
+      • X / Z   — горизонтальный центр зоны → поле 15×15 ровно внутри коробки.
+      • Y       — верхняя грань коробки: поверхность шахты совпадает с верхом
+                  зоны, дальше блоки копаются вниз (Neighbor Reveal) и заполняют
+                  всю коробку (её высота = стартовый куб, SURFACE_H блоков).
+    Шахта появляется ровно в зоне маркера и следует за ним, если его подвинуть.
+    Кэшируется на жизнь renderer'а (блоков тысячи — не читаем workspace на
+    каждый). Сбрасывается в start(): новый респавн подхватит новое положение
+    маркера. Fallback'ы: MineRespawn, затем историческое (0,0,30).
+]]
+function MiningRenderer:_mineOrigin(): Vector3
+    if self._origin then return self._origin end
+    local marker = workspace:FindFirstChild("MineZoneMarker")
+    local volume = marker and marker:FindFirstChild("Volume")
+    if volume and volume:IsA("BasePart") then
+        -- верх-центр коробки: блок y=0 верхней гранью ложится на верх зоны
+        self._origin = volume.Position + Vector3.new(0, volume.Size.Y / 2, 0)
+    else
+        local mr = workspace:FindFirstChild("MineRespawn")
+        if mr and mr:IsA("BasePart") then
+            self._origin = mr.Position
+        else
+            self._origin = Vector3.new(0, 0, 30)
+        end
+    end
+    return self._origin
 end
 
 function MiningRenderer:setSwingDelay(speedLevel: number)
@@ -470,14 +564,55 @@ function MiningRenderer:_hoverEnter(key: string)
         local gui = self:_ensureHPBar(key)
         if gui then gui.Enabled = true end
     end
-    local light = Instance.new("PointLight")
-    light.Name = "HoverLight"; light.Brightness = 1.2; light.Range = 6
-    light.Color = Color3.fromRGB(255, 210, 80); light.Parent = part
+    local d = self._blockData[key]
+    local oreId = d and d.oreId or "dirt"
+    local rarity = OreLookup.getRarity(oreId)
+    local rarColor = OreLookup.getRarityColor(oreId)
+    local oreName = OreLookup.getName(oreId)
+    -- Обычные руды обводятся/подписываются белым (их rarity-серый сливается с
+    -- камнем); rare+ — своим цветом редкости.
+    local outlineColor = if rarity == "common" then Color3.new(1, 1, 1) else rarColor
+
+    -- Название руды чуть выше HP-бара (HP-бар на Y=-2.8) — цвет = outlineColor.
+    local nameGui = Instance.new("BillboardGui")
+    nameGui.Name = "HoverName"
+    nameGui.Size = UDim2.fromOffset(180, 28)
+    nameGui.StudsOffset = Vector3.new(0, -1.5, 0)
+    nameGui.AlwaysOnTop = true
+    nameGui.LightInfluence = 0
+    nameGui.Parent = part
+    local nameLbl = Instance.new("TextLabel")
+    nameLbl.Size = UDim2.fromScale(1, 1)
+    nameLbl.BackgroundTransparency = 1
+    nameLbl.Text = oreName
+    nameLbl.Font = Enum.Font.GothamBold
+    nameLbl.TextSize = 15
+    nameLbl.TextColor3 = outlineColor
+    nameLbl.TextStrokeTransparency = 0.25
+    nameLbl.TextStrokeColor3 = Color3.new(0, 0, 0)
+    nameLbl.Parent = nameGui
+
+    -- Обводка блока — цвет редкости (common = белый), линия пожирнее.
     local sel = Instance.new("SelectionBox")
-    sel.Name = "HoverSel"; sel.Adornee = part; sel.LineThickness = 0.04
-    sel.Color3 = Color3.fromRGB(255, 230, 120); sel.SurfaceTransparency = 0.9; sel.Parent = part
+    sel.Name = "HoverSel"
+    sel.Adornee = part
+    sel.LineThickness = 0.12
+    sel.Color3 = outlineColor
+    sel.SurfaceTransparency = 0.92
+    sel.Parent = part
+
     if not part:GetAttribute("_squashing") then
         TweenService:Create(part, TweenInfo.new(0.1, Enum.EasingStyle.Quad), { Size = HOVER_BSv }):Play()
+    end
+    -- Накидка выезжает наружу вместе с растущей гранью блока, чтобы не утонуть.
+    local shell = part:FindFirstChild("OreShell")
+    if shell and shell:IsA("BasePart") then
+        local rest = shell:GetAttribute("RestCF")
+        if typeof(rest) == "CFrame" then
+            TweenService:Create(shell, TweenInfo.new(0.1, Enum.EasingStyle.Quad), {
+                CFrame = rest + rest.RightVector * (BS * 0.025),
+            }):Play()
+        end
     end
 end
 
@@ -487,15 +622,83 @@ function MiningRenderer:_hoverLeave(key: string)
     part:SetAttribute("_hovered", false)
     local hd = self._blockData[key]
     if hd and hd.hpGui then hd.hpGui.Enabled = false end
-    local li = part:FindFirstChild("HoverLight"); if li then li:Destroy() end
+    local nameGui = part:FindFirstChild("HoverName"); if nameGui then nameGui:Destroy() end
     local sel = part:FindFirstChild("HoverSel"); if sel then sel:Destroy() end
     if part:GetAttribute("_destroying") then return end
     if not part:GetAttribute("_squashing") then
         TweenService:Create(part, TweenInfo.new(0.1, Enum.EasingStyle.Quad), { Size = BSv }):Play()
     end
+    -- Накидка возвращается на опорную позицию.
+    local shell = part:FindFirstChild("OreShell")
+    if shell and shell:IsA("BasePart") then
+        local rest = shell:GetAttribute("RestCF")
+        if typeof(rest) == "CFrame" then
+            TweenService:Create(shell, TweenInfo.new(0.1, Enum.EasingStyle.Quad), { CFrame = rest }):Play()
+        end
+    end
+end
+
+-- Небольшой PointLight следует за лучом мыши в шахте (вместо фонарика на игроке).
+function MiningRenderer:_ensureCursorLight()
+    if self._cursorLightHost then return end
+    local cfg = Constants.CURSOR_LIGHT or {
+        brightness = 0.85, range = 11,
+        color = Color3.fromRGB(255, 248, 230), fallbackDistance = 14,
+    }
+    local host = Instance.new("Part")
+    host.Name = "CursorLightHost"
+    host.Size = Vector3.new(0.1, 0.1, 0.1)
+    host.Anchored = true
+    host.CanCollide = false; host.CanTouch = false; host.CanQuery = false
+    host.Transparency = 1; host.CastShadow = false; host.Massless = true
+    local light = Instance.new("PointLight")
+    light.Name = "CursorLight"
+    light.Brightness = cfg.brightness
+    light.Range = cfg.range
+    light.Color = cfg.color
+    light.Shadows = false
+    light.Parent = host
+    host.Parent = self._parent
+    self._cursorLightHost = host
+    self._cursorLight = light
+end
+
+function MiningRenderer:_updateCursorLight()
+    if not self._parent then return end
+    self:_ensureCursorLight()
+    local host = self._cursorLightHost
+    local light = self._cursorLight
+    if not host or not light then return end
+    local cam = workspace.CurrentCamera
+    local params = self:_raycastParams()
+    if not cam or not params then
+        light.Enabled = false
+        return
+    end
+    local cfg = Constants.CURSOR_LIGHT or { fallbackDistance = 14 }
+    local mouse = UserInputService:GetMouseLocation()
+    local ray = cam:ViewportPointToRay(mouse.X, mouse.Y)
+    local hit = workspace:Raycast(ray.Origin, ray.Direction * RAYCAST_DISTANCE, params)
+    local pos: Vector3
+    if hit then
+        pos = hit.Position + hit.Normal * 0.25
+    else
+        pos = ray.Origin + ray.Direction * (cfg.fallbackDistance or 14)
+    end
+    host.Position = pos
+    light.Enabled = true
+end
+
+function MiningRenderer:_destroyCursorLight()
+    if self._cursorLightHost then
+        self._cursorLightHost:Destroy()
+        self._cursorLightHost = nil
+        self._cursorLight = nil
+    end
 end
 
 function MiningRenderer:_updateHover()
+    self:_updateCursorLight()
     local part = self:_raycastBlockPart()
     local key = if part then part.Name else nil
     if key == self._hoveredKey then return end
@@ -554,21 +757,31 @@ end
 
 function MiningRenderer:_makeHPBar(hp, maxHp)
     local gui = Instance.new("BillboardGui")
-    gui.Size = UDim2.fromOffset(110, 16); gui.StudsOffset = Vector3.new(0, -2.8, 0)
+    gui.Size = UDim2.fromOffset(120, 20); gui.StudsOffset = Vector3.new(0, -2.8, 0)
     gui.AlwaysOnTop = true; gui.ClipsDescendants = true; gui.Enabled = false
     local bg = Instance.new("Frame"); bg.Size = UDim2.fromScale(1, 1)
-    bg.BackgroundColor3 = Color3.fromRGB(5, 5, 15); bg.BackgroundTransparency = 0.25
-    bg.BorderSizePixel = 2; bg.BorderColor3 = Color3.fromRGB(160, 170, 200)
-    Instance.new("UICorner", bg).CornerRadius = UDim.new(0, 4)
+    bg.BackgroundColor3 = Color3.fromRGB(8, 8, 16); bg.BackgroundTransparency = 0.05
+    bg.BorderSizePixel = 0
+    Instance.new("UICorner", bg).CornerRadius = UDim.new(0, 5)
+    -- Жирная обводка, чтобы бар читался поверх любого блока, а не сливался.
+    local barStroke = Instance.new("UIStroke")
+    barStroke.Thickness = 2.5
+    barStroke.Color = Color3.fromRGB(15, 15, 25)
+    barStroke.Parent = bg
+    -- Внутренний отступ, чтобы fill не залезал под обводку.
+    local pad = Instance.new("Frame"); pad.Size = UDim2.new(1, -4, 1, -4); pad.Position = UDim2.fromOffset(2, 2)
+    pad.BackgroundColor3 = Color3.fromRGB(30, 32, 42); pad.BorderSizePixel = 0
+    Instance.new("UICorner", pad).CornerRadius = UDim.new(0, 4); pad.Parent = bg
     local fill = Instance.new("Frame"); fill.Name = "Fill"
     fill.Size = UDim2.fromScale(math.max(0.02, hp / maxHp), 1)
-    fill.BackgroundColor3 = Color3.fromRGB(55, 220, 55); fill.BorderSizePixel = 0
-    Instance.new("UICorner", fill).CornerRadius = UDim.new(0, 3)
+    fill.BackgroundColor3 = Color3.fromRGB(60, 230, 60); fill.BorderSizePixel = 0
+    Instance.new("UICorner", fill).CornerRadius = UDim.new(0, 4); fill.Parent = pad
     local txt = Instance.new("TextLabel"); txt.Size = UDim2.fromScale(1, 1)
     txt.BackgroundTransparency = 1; txt.Text = formatHP(hp, maxHp)
-    txt.Font = Enum.Font.GothamBold; txt.TextSize = 11; txt.TextScaled = true
-    txt.TextColor3 = Color3.new(1, 1, 1); txt.TextStrokeTransparency = 0.3; txt.TextStrokeColor3 = Color3.new(0, 0, 0)
-    fill.Parent = bg; txt.Parent = bg; bg.Parent = gui
+    txt.Font = Enum.Font.GothamBold; txt.TextSize = 12; txt.TextScaled = true
+    txt.TextColor3 = Color3.new(1, 1, 1); txt.TextStrokeTransparency = 0.2; txt.TextStrokeColor3 = Color3.new(0, 0, 0)
+    txt.ZIndex = 3; txt.Parent = bg
+    bg.Parent = gui
     return gui, fill, txt
 end
 
@@ -610,6 +823,124 @@ function MiningRenderer:_ensureRarityTag(key)
     return tag
 end
 
+-- Строит low-poly кластер кристаллов-шардов поверх блока. Шарды — child'ы
+-- блока (anchored, massless, без коллизий/теней/света), удаляются вместе с ним.
+-- Тёмные руды (void) красят кристаллы в цвет редкости, чтобы не слиться с чернотой.
+-- Возвращает true, если нарост создан (для учёта в капе MAX_PROTRUSIONS).
+function MiningRenderer:_addProtrusion(part: BasePart, oreId: string, rarity: string): boolean
+    local cfg = CRYSTAL_BY_RARITY[rarity]
+    if not cfg then return false end
+    if self._activeProtrusions >= MAX_PROTRUSIONS then return false end
+    local oreColor = OreLookup.getColor(oreId)
+    local crystalColor
+    if lumOf(oreColor) < 0.18 then
+        crystalColor = brightenColor(OreLookup.getRarityColor(oreId), 0.15)
+    else
+        crystalColor = brightenColor(oreColor, 0.18)
+    end
+    local pos = part.Position
+    local topY = pos.Y + BS / 2
+    for _ = 1, cfg.shards do
+        local h = BS * 0.55 * cfg.scale * (0.7 + math.random() * 0.6)
+        local w = BS * 0.16 * cfg.scale * (0.8 + math.random() * 0.5)
+        local shard = Instance.new("Part")
+        shard.Name = "Crystal"
+        shard.Size = Vector3.new(w, h, w)
+        shard.Anchored = true
+        shard.CanCollide = false; shard.CanTouch = false; shard.CanQuery = false; shard.CastShadow = false
+        shard.Massless = true
+        shard.Material = cfg.mat
+        shard.Reflectance = cfg.refl
+        shard.Color = crystalColor
+        smoothSurfaces(shard)
+        local ox = (math.random() - 0.5) * BS * 0.55
+        local oz = (math.random() - 0.5) * BS * 0.55
+        shard.CFrame = CFrame.new(pos.X + ox, topY + h * 0.30, pos.Z + oz)
+            * CFrame.Angles(
+                math.rad((math.random() - 0.5) * 38),
+                math.rad(45 + math.random() * 30),
+                math.rad((math.random() - 0.5) * 38)
+            )
+        shard.Parent = part
+    end
+    self._activeProtrusions += 1
+    return true
+end
+
+-- Выбирает мировую нормаль грани, на которую вешать накидку: открытую (без
+-- соседа) грань, наиболее обращённую к камере. Соседи проверяются по сетке
+-- (созданные + ожидающие создания). Если всё закрыто — верх (к поверхности).
+function MiningRenderer:_shellFaceNormal(x: number, z: number, y: number): Vector3
+    local faces = {
+        { key = string.format("%d_%d_%d", x + 1, z, y), n = Vector3.new(1, 0, 0) },
+        { key = string.format("%d_%d_%d", x - 1, z, y), n = Vector3.new(-1, 0, 0) },
+        { key = string.format("%d_%d_%d", x, z + 1, y), n = Vector3.new(0, 0, 1) },
+        { key = string.format("%d_%d_%d", x, z - 1, y), n = Vector3.new(0, 0, -1) },
+        { key = string.format("%d_%d_%d", x, z, y - 1), n = Vector3.new(0, 1, 0) },  -- меньший y = выше (см. _createPart)
+        { key = string.format("%d_%d_%d", x, z, y + 1), n = Vector3.new(0, -1, 0) },
+    }
+    local o = self:_mineOrigin()
+    local blockPos = Vector3.new(o.X + x * BS, o.Y - (y * BS + BS / 2), o.Z + z * BS)
+    local cam = workspace.CurrentCamera
+    local toCam = if cam then (cam.CFrame.Position - blockPos) else Vector3.new(0, 1, 0)
+    local best, bestScore = nil, -math.huge
+    for _, f in ipairs(faces) do
+        local occupied = self._parts[f.key] ~= nil or self._createPending[f.key] ~= nil
+        if not occupied then
+            local score = f.n:Dot(toCam)
+            if score > bestScore then bestScore = score; best = f.n end
+        end
+    end
+    return best or Vector3.new(0, 1, 0)
+end
+
+-- Вешает накидку-меш на открытую грань блока. Цвет — цвет руды чуть светлее
+-- (порода под ней уже затемнена). Тёмные руды берут цвет редкости, чтобы не
+-- слиться. legendary/mythic — Neon. Меш anchored/massless/без коллизий/теней,
+-- удаляется вместе с блоком. Учитывается в капе MAX_PROTRUSIONS.
+function MiningRenderer:_addShell(part: BasePart, x: number, z: number, y: number, oreId: string, rarity: string): boolean
+    if self._activeProtrusions >= MAX_PROTRUSIONS then return false end
+    local oreColor = OreLookup.getColor(oreId)
+    local shellColor
+    if lumOf(oreColor) < 0.14 then
+        shellColor = brightenColor(OreLookup.getRarityColor(oreId), 0.1)
+    else
+        shellColor = brightenColor(oreColor, SHELL_BRIGHTEN)
+    end
+
+    local normal = self:_shellFaceNormal(x, z, y)
+    -- Ортонормированный базис: тонкая ось меша (local X) = нормаль грани наружу.
+    local right = normal.Unit
+    local up0 = if math.abs(right.Y) < 0.9 then Vector3.new(0, 1, 0) else Vector3.new(0, 0, 1)
+    local up = (up0 - right * right:Dot(up0)).Unit
+    local back = right:Cross(up)
+    local pos = part.Position + right * (BS / 2 + 0.12)
+
+    local host = Instance.new("Part")
+    host.Name = "OreShell"
+    host.Size = Vector3.new(1, 1, 1) -- визуал задаёт SpecialMesh.Scale, не Size
+    host.Anchored = true
+    host.CanCollide = false; host.CanTouch = false; host.CanQuery = false; host.CastShadow = false
+    host.Massless = true
+    host.Material = if SHELL_NEON_RARITY[rarity] then Enum.Material.Neon else Enum.Material.SmoothPlastic
+    host.Reflectance = 0
+    host.Color = shellColor
+    host.CFrame = CFrame.fromMatrix(pos, right, up, back)
+
+    local mesh = Instance.new("SpecialMesh")
+    mesh.MeshType = Enum.MeshType.FileMesh
+    mesh.MeshId = SHELL_MESH_ID
+    mesh.Scale = Vector3.new(SHELL_SCALE, SHELL_SCALE, SHELL_SCALE)
+    mesh.Parent = host
+
+    host.Parent = part
+    -- Опорный CFrame: hover двигает накидку наружу вместе с гранью блока,
+    -- hoverLeave возвращает сюда. RightVector = нормаль грани (наружу).
+    host:SetAttribute("RestCF", host.CFrame)
+    self._activeProtrusions += 1
+    return true
+end
+
 function MiningRenderer:_createPart(x, z, y, oreId, hp, maxHp)
     PerfBeacon.bump("partsCreated")
     local key = string.format("%d_%d_%d", x, z, y)
@@ -619,26 +950,37 @@ function MiningRenderer:_createPart(x, z, y, oreId, hp, maxHp)
     -- shadow-casting парт'ов — главный убийца FPS (shadowmap/voxel lighting
     -- считает тени для каждого). Все динамические FX тоже идут без теней.
     part.CanCollide = true; part.CanTouch = false; part.CastShadow = false
-    part.BrickColor = BrickColor.new(OreLookup.getColor(oreId))
 
-    -- Rarity-телеграф материала/блеска (см. ORE_VISUAL_BY_RARITY). OreDef.material
-    -- / glow / reflectance (Фаза 14) переопределяют дефолт по редкости.
+    -- Low-poly блок: плоский материал (SmoothPlastic) + цвет руды с лёгким
+    -- джиттером. OreDef.material/reflectance всё ещё могут переопределить дефолт
+    -- (на будущее), но в данных они больше не задаются — всё плоское.
     local rarity = OreLookup.getRarity(oreId)
     local visual = ORE_VISUAL_BY_RARITY[rarity] or DEFAULT_VISUAL
     local def = OreLookup.getDef(oreId)
     local mat = visual.material
     local refl = visual.reflectance
     if def then
-        if def.glow then mat = Enum.Material.Foil end
         if def.material then mat = def.material end
         if def.reflectance ~= nil then refl = def.reflectance end
     end
+
+    -- Не-наполнительные руды: куб становится тёмной «породой», а цвет руды несёт
+    -- накидка-меш сверху. darken применяем только если накидка влезет в кап.
+    local oreColor = OreLookup.getColor(oreId)
+    local isFiller = (not def) or ((def.weight or 0) >= FILLER_WEIGHT)
+    local willShell = (not isFiller) and self._activeProtrusions < MAX_PROTRUSIONS
+    local hostColor = if willShell then darkenColor(oreColor, 0.42) else oreColor
+    part.Color = jitterColor(hostColor)
     part.Material = mat
     part.Reflectance = refl
+    smoothSurfaces(part)
     part.Parent = self._parent
-    local px = x * BS; local pz = z * BS + 30
-    local py = -(y * BS + BS / 2)
-    part.Position = Vector3.new(px, py, pz)
+    local o = self:_mineOrigin()
+    part.Position = Vector3.new(
+        o.X + x * BS,
+        o.Y - (y * BS + BS / 2),
+        o.Z + z * BS
+    )
     -- Клик/hover — один raycast (UserInputService + RenderStepped), не ClickDetector на каждый блок.
 
     local rar = rarity
@@ -691,8 +1033,14 @@ function MiningRenderer:_createPart(x, z, y, oreId, hp, maxHp)
         sp.Parent = part
     end
 
+    -- Накидка-меш для всех не-наполнительных руд (на открытой грани, цвет руды).
+    local hasProtrusion = false
+    if not isFiller then
+        hasProtrusion = self:_addShell(part, x, z, y, oreId, rarity)
+    end
+
     self._parts[key] = part
-    self._blockData[key] = { oreId = oreId, hp = hp, maxHp = maxHp, hasGlow = hasGlow }
+    self._blockData[key] = { oreId = oreId, hp = hp, maxHp = maxHp, hasGlow = hasGlow, hasProtrusion = hasProtrusion }
 
     -- Если плашки редкости включены глобально (/rarity), показать её и на
     -- свежесозданном блоке (например, пришедшем delta'ой).
@@ -710,6 +1058,7 @@ function MiningRenderer:_destroyPart(key)
     end
     local d = self._blockData[key]
     if d and d.hasGlow then self._activeGlows = math.max(0, self._activeGlows - 1) end
+    if d and d.hasProtrusion then self._activeProtrusions = math.max(0, self._activeProtrusions - 1) end
     local p = self._parts[key]; if p then p:Destroy(); self._parts[key] = nil; self._blockData[key] = nil end
 end
 
@@ -815,6 +1164,15 @@ function MiningRenderer:_animateDestroy(key)
     local cf = p.CFrame
     TweenService:Create(p, TweenInfo.new(0.25, Enum.EasingStyle.Quint), { Size = Vector3.new(0.1, 0.1, 0.1), Transparency = 0.8 }):Play()
     TweenService:Create(p, TweenInfo.new(0.25, Enum.EasingStyle.Quint), { CFrame = cf * CFrame.new(0, -BS/2, 0) }):Play()
+    -- Накидка — отдельный part (не следует за Size/CFrame блока), анимируем её
+    -- синхронно: проседает вниз + растворяется, иначе висит до уничтожения блока.
+    local shell = p:FindFirstChild("OreShell")
+    if shell and shell:IsA("BasePart") then
+        TweenService:Create(shell, TweenInfo.new(0.25, Enum.EasingStyle.Quint), {
+            Transparency = 1,
+            CFrame = shell.CFrame + Vector3.new(0, -BS / 2, 0),
+        }):Play()
+    end
     -- Гард: если за 0.3 с по тому же ключу появится НОВЫЙ part (replace
     -- через delta), не сносить его — сверяемся по конкретному инстансу.
     -- Старый part всё равно убираем, чтобы не оставить мусор в workspace.
@@ -1142,6 +1500,7 @@ end
 
 function MiningRenderer:start()
     self._enabled = true
+    self._origin = nil -- перечитать зону MineZoneMarker после респавна
     -- Захватываем поколение ДО создания папки: новый активный renderer, любой
     -- старый автоматически считается stale и выключится на следующем тике.
     local gen = ((_G :: any).DD_RENDER_GEN or 0) + 1
@@ -1173,8 +1532,9 @@ function MiningRenderer:stop()
         perfPublish()
     end
     self:_teardownInput()
+    self:_destroyCursorLight()
     for _, p in pairs(self._parts) do p:Destroy() end
-    self._parts = {}; self._blockData = {}; self._activeGlows = 0
+    self._parts = {}; self._blockData = {}; self._activeGlows = 0; self._activeProtrusions = 0
     self:_clearCreateQueue()
     if self._parent then self._parent:Destroy(); self._parent = nil end
 end
