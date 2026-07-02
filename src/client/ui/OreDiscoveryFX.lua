@@ -22,7 +22,15 @@ local TweenService = game:GetService("TweenService")
 local Debris = game:GetService("Debris")
 local Workspace = game:GetService("Workspace")
 
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local shared = ReplicatedStorage:WaitForChild("shared")
+
 local CameraShake = require(script.Parent.Parent.core.CameraShake)
+local OreLookup = require(script.Parent.Parent.core.OreLookup)
+local OreAssets = require(shared.data.OreAssets)
+local UiAssets = require(shared.data.UiAssets)
+local OreFXPalette = require(shared.util.OreFXPalette)
+local UiScreen = require(script.Parent.util.UiScreen)
 
 local OreDiscoveryFX = {}
 
@@ -178,16 +186,15 @@ local function sparkles(parent: Instance, color: Color3, count: number)
     for i = 1, count do
         local ang = (i / count) * math.pi * 2 + math.random() * 0.4
         local dist = 70 + math.random() * 50
-        local star = Instance.new("TextLabel")
+        local star = Instance.new("ImageLabel")
         star.Size = UDim2.fromOffset(0, 0)
         star.Position = UDim2.fromScale(0.5, 0.5)
         star.AnchorPoint = Vector2.new(0.5, 0.5)
         star.BackgroundTransparency = 1
-        star.Text = "✦"
-        star.TextColor3 = color
-        star.TextScaled = true
-        star.Font = Enum.Font.GothamBold
-        star.TextTransparency = 0.1
+        star.Image = UiAssets.image("icon_sparkle")
+        star.ImageColor3 = color
+        star.ScaleType = Enum.ScaleType.Fit
+        star.ImageTransparency = 0.1
         star.ZIndex = 6
         star.Parent = parent
         local sz = 14 + math.random() * 14
@@ -197,7 +204,7 @@ local function sparkles(parent: Instance, color: Color3, count: number)
             Position = target,
         }):Play()
         TweenService:Create(star, TweenInfo.new(0.7, Enum.EasingStyle.Quad), {
-            TextTransparency = 1,
+            ImageTransparency = 1,
             Rotation = (math.random() - 0.5) * 180,
         }):Play()
         Debris:AddItem(star, 0.9)
@@ -216,7 +223,10 @@ local function playOne(entry: { oreId: string, name: string, icon: string, rarit
     end
 
     local rarity = entry.rarity or "common"
-    local color = RARITY_COLOR[rarity] or RARITY_COLOR.common
+    local rarityColor = RARITY_COLOR[rarity] or RARITY_COLOR.common
+    local palette = OreFXPalette.fromColors(OreLookup.getColor(entry.oreId), rarityColor)
+    local color = palette.glow
+    local oreColor = palette.core
     local weight = RARITY_WEIGHT[rarity] or 1
     local isRare = weight >= 3
     -- Дольше держим на экране (исчезало слишком быстро); редкие — ещё дольше.
@@ -224,9 +234,7 @@ local function playOne(entry: { oreId: string, name: string, icon: string, rarit
 
     local gui = Instance.new("ScreenGui")
     gui.Name = FX_GUI_NAME
-    gui.ResetOnSpawn = false
-    gui.IgnoreGuiInset = true
-    gui.DisplayOrder = 94
+    UiScreen.apply(gui, "fx")
     gui.Parent = pg
     _activeGui = gui
 
@@ -288,6 +296,17 @@ local function playOne(entry: { oreId: string, name: string, icon: string, rarit
     center.ZIndex = 2
     center.Parent = root
 
+    -- Композиция свёрстана в фикс-пикселях (360²). На маленьких/узких экранах
+    -- (мобайл-лендскейп) ужимаем её целиком, чтобы баннер и кольца не клиппались.
+    local cam = Workspace.CurrentCamera
+    local viewport = cam and cam.ViewportSize or Vector2.new(1024, 768)
+    local fitScale = math.clamp(math.min(viewport.X / 480, viewport.Y / 460), 0.6, 1)
+    if fitScale < 1 then
+        local fit = Instance.new("UIScale")
+        fit.Scale = fitScale
+        fit.Parent = center
+    end
+
     -- Аура свечения (мягкий круг цвета редкости).
     local aura = Instance.new("Frame")
     aura.Size = UDim2.fromOffset(40, 40)
@@ -318,29 +337,52 @@ local function playOne(entry: { oreId: string, name: string, icon: string, rarit
     end
 
     -- Иконка руды — pop-in от нуля (Back/Out) + лёгкий wobble.
-    local icon = Instance.new("TextLabel")
-    icon.Size = UDim2.fromOffset(0, 0)
-    icon.Position = UDim2.fromScale(0.5, 0.46)
-    icon.AnchorPoint = Vector2.new(0.5, 0.5)
-    icon.BackgroundTransparency = 1
-    icon.Text = entry.icon ~= "" and entry.icon or "⛏"
-    icon.TextScaled = true
-    icon.Font = Enum.Font.GothamBold
-    icon.TextColor3 = Color3.fromRGB(255, 255, 255)
-    icon.ZIndex = 5
-    icon.Parent = center
+    local imageId = OreLookup.getImage(entry.oreId)
+    local iconContent = if imageId == "" then OreAssets.iconContent(entry.oreId) else nil
+    local iconHost: GuiObject
+    if imageId ~= "" then
+        local img = Instance.new("ImageLabel")
+        img.Size = UDim2.fromOffset(0, 0)
+        img.Position = UDim2.fromScale(0.5, 0.46)
+        img.AnchorPoint = Vector2.new(0.5, 0.5)
+        img.BackgroundTransparency = 1
+        img.Image = imageId
+        img.ScaleType = Enum.ScaleType.Fit
+        img.ZIndex = 5
+        iconHost = img
+    elseif iconContent then
+        local img = Instance.new("ImageLabel")
+        img.Size = UDim2.fromOffset(0, 0)
+        img.Position = UDim2.fromScale(0.5, 0.46)
+        img.AnchorPoint = Vector2.new(0.5, 0.5)
+        img.BackgroundTransparency = 1
+        img.ImageContent = iconContent
+        img.ScaleType = Enum.ScaleType.Fit
+        img.ZIndex = 5
+        iconHost = img
+    else
+        local lbl = Instance.new("ImageLabel")
+        lbl.Size = UDim2.fromOffset(0, 0)
+        lbl.Position = UDim2.fromScale(0.5, 0.46)
+        lbl.AnchorPoint = Vector2.new(0.5, 0.5)
+        lbl.BackgroundTransparency = 1
+        lbl.Image = UiAssets.image("upg_pickaxe")
+        lbl.ScaleType = Enum.ScaleType.Fit
+        lbl.ZIndex = 5
+        iconHost = lbl
+    end
+    iconHost.Parent = center
     local iconStroke = Instance.new("UIStroke")
-    iconStroke.Color = color
+    iconStroke.Color = palette.accent
     iconStroke.Thickness = 2
     iconStroke.Transparency = 0.2
-    iconStroke.Parent = icon
-    TweenService:Create(icon, TweenInfo.new(0.42, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+    iconStroke.Parent = iconHost
+    TweenService:Create(iconHost, TweenInfo.new(0.42, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
         Size = UDim2.fromOffset(120, 120),
     }):Play()
     task.delay(0.42, function()
-        if not icon.Parent then return end
-        -- Лёгкий wobble после появления.
-        local w1 = TweenService:Create(icon, TweenInfo.new(0.5, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, 1, true), { Rotation = 6 })
+        if not iconHost.Parent then return end
+        local w1 = TweenService:Create(iconHost, TweenInfo.new(0.5, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, 1, true), { Rotation = 6 })
         w1:Play()
     end)
 
@@ -350,7 +392,7 @@ local function playOne(entry: { oreId: string, name: string, icon: string, rarit
     banner.Position = UDim2.fromScale(0.5, 0.16)
     banner.AnchorPoint = Vector2.new(0.5, 0.5)
     banner.BackgroundTransparency = 1
-    banner.Text = "✦ НОВАЯ НАХОДКА ✦"
+    banner.Text = "НОВАЯ НАХОДКА"
     banner.TextSize = 18
     banner.Font = Enum.Font.GothamBlack
     banner.TextColor3 = color
@@ -370,6 +412,7 @@ local function playOne(entry: { oreId: string, name: string, icon: string, rarit
     nameLbl.TextSize = 28
     nameLbl.Font = Enum.Font.GothamBlack
     nameLbl.TextColor3 = Color3.fromRGB(245, 240, 230)
+    nameLbl.TextTruncate = Enum.TextTruncate.AtEnd
     nameLbl.TextTransparency = 1
     nameLbl.TextStrokeColor3 = dim(color, 0.4)
     nameLbl.TextStrokeTransparency = 0.3
@@ -393,7 +436,7 @@ local function playOne(entry: { oreId: string, name: string, icon: string, rarit
     rarLbl.Text = (RARITY_LABEL[rarity] or rarity):upper()
     rarLbl.TextSize = 14
     rarLbl.Font = Enum.Font.GothamBold
-    rarLbl.TextColor3 = color
+    rarLbl.TextColor3 = palette.accent
     rarLbl.TextTransparency = 1
     rarLbl.ZIndex = 6
     rarLbl.Parent = center
@@ -415,22 +458,27 @@ local function playOne(entry: { oreId: string, name: string, icon: string, rarit
             onDone()
             return
         end
-        for _, d in ipairs(center:GetDescendants()) do
+        for _, d in ipairs(gui:GetDescendants()) do
             if d:IsA("TextLabel") then
                 TweenService:Create(d, TweenInfo.new(0.3), { TextTransparency = 1, TextStrokeTransparency = 1 }):Play()
+            elseif d:IsA("ImageLabel") then
+                TweenService:Create(d, TweenInfo.new(0.28), { ImageTransparency = 1 }):Play()
+            elseif d:IsA("UIStroke") then
+                TweenService:Create(d, TweenInfo.new(0.28), { Transparency = 1 }):Play()
             elseif d:IsA("Frame") then
                 TweenService:Create(d, TweenInfo.new(0.3), { BackgroundTransparency = 1 }):Play()
             end
         end
         TweenService:Create(backdrop, TweenInfo.new(0.32), { BackgroundTransparency = 1 }):Play()
-        TweenService:Create(icon, TweenInfo.new(0.28, Enum.EasingStyle.Back, Enum.EasingDirection.In), {
+        TweenService:Create(iconHost, TweenInfo.new(0.28, Enum.EasingStyle.Back, Enum.EasingDirection.In), {
             Size = UDim2.fromOffset(0, 0),
+            ImageTransparency = 1,
         }):Play()
         task.delay(0.34, function()
             if _activeGui == gui then
                 _activeGui = nil
             end
-            if gui then
+            if gui.Parent then
                 gui:Destroy()
             end
             onDone()

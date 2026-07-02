@@ -19,6 +19,10 @@
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local Debris = game:GetService("Debris")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local UiAssets = require(ReplicatedStorage:WaitForChild("shared").data.UiAssets)
+local UiScreen = require(script.Parent.util.UiScreen)
 
 local RewardFX = {}
 
@@ -38,18 +42,7 @@ local RARITY_COLOR: { [string]: Color3 } = {
 local function ensureGui(): ScreenGui?
     local pg = Players.LocalPlayer and Players.LocalPlayer:FindFirstChildOfClass("PlayerGui")
     if not pg then return nil end
-    local existing = pg:FindFirstChild(FX_GUI_NAME)
-    if existing and existing:IsA("ScreenGui") then
-        return existing
-    end
-    local gui = Instance.new("ScreenGui")
-    gui.Name = FX_GUI_NAME
-    gui.ResetOnSpawn = false
-    gui.IgnoreGuiInset = true
-    -- Поверх HUD/модала (95), ниже notifications (100).
-    gui.DisplayOrder = 98
-    gui.Parent = pg
-    return gui
+    return UiScreen.ensure(pg, FX_GUI_NAME, "fx")
 end
 
 local function spawnCoin(parent: ScreenGui, viewportX: number, viewportY: number)
@@ -57,14 +50,13 @@ local function spawnCoin(parent: ScreenGui, viewportX: number, viewportY: number
     local startX = math.random() * viewportX
     local startY = -size - math.random() * 80
 
-    local label = Instance.new("TextLabel")
+    local label = Instance.new("ImageLabel")
     label.Size = UDim2.fromOffset(size, size)
     label.Position = UDim2.fromOffset(startX, startY)
     label.BackgroundTransparency = 1
-    label.Text = "💰"
-    label.TextSize = size
-    label.Font = Enum.Font.GothamBlack
-    label.TextColor3 = Color3.fromRGB(255, 215, 90)
+    label.Image = UiAssets.coin()
+    label.ScaleType = Enum.ScaleType.Fit
+    label.ImageTransparency = 0
     label.Rotation = math.random() * 360
     label.Parent = parent
 
@@ -76,7 +68,7 @@ local function spawnCoin(parent: ScreenGui, viewportX: number, viewportY: number
     local tween = TweenService:Create(label, TweenInfo.new(fallTime, Enum.EasingStyle.Sine, Enum.EasingDirection.In), {
         Position = UDim2.fromOffset(startX + (math.random() - 0.5) * 80, endY),
         Rotation = rotation,
-        TextTransparency = 0.4,
+        ImageTransparency = 0.8,
     })
     tween:Play()
     Debris:AddItem(label, fallTime + 0.2)

@@ -1,272 +1,259 @@
 --!strict
--- TutorialArrow.lua — Phase 8.
---
--- Подсветка / стрелка на нужный элемент. Универсальный helper для
--- туториала и любых будущих подсказок (например, ребёрт-prompt).
---
--- API:
---   local handle = TutorialArrow.pointAt(target, text)
---   handle:destroy()
---
---   target = GuiObject     → пульсирующий золотой UIStroke + label сбоку.
---   target = BasePart      → BillboardGui ⬇ с bounce-tween над блоком.
---   target = nil           → возвращается no-op handle (ничего не рисуем).
---
--- Конвенции:
---   * Всё живёт в одном ScreenGui `DeepDigger_Tutorial`, чтобы не плодить
---     гуи и не конфликтовать с HUD.
---   * `Active = false` на оверлеях → клик через стрелку доходит до цели.
---   * Pulse / bounce — `RepeatCount = -1, Reverses = true`. Закрытие
---     handle:destroy() гарантирует, что Tween остановлен, Instance удалены,
---     RunService-конекшнов после нас не остаётся.
---   * Для GuiObject стрелка живёт «прилипшей» к target через RenderStepped:
---     цель может двигаться (например, MainPanel то open/close), оверлей
---     должен ехать за ней.
---   * Для BasePart мы не следим за движением (блоки в нашем рендере
---     анкорные, не двигаются). Это упрощает реализацию.
+-- Подсветка цели: обводка на HUD-элементе или 3D-пин в мире.
 
-local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
-local RunService = game:GetService("RunService")
 
-local TUTORIAL_GUI_NAME = "DeepDigger_Tutorial"
-local GOLD = Color3.fromRGB(255, 210, 50)
-local GOLD_DARK = Color3.fromRGB(180, 130, 20)
-local PULSE_THIN = 1.5
-local PULSE_THICK = 3.5
-local PULSE_DURATION = 0.55
+local UiAssets = require(ReplicatedStorage:WaitForChild("shared").data.UiAssets)
+
+local GOLD = Color3.fromRGB(255, 214, 96)
+local GOLD_HI = Color3.fromRGB(255, 244, 210)
+local HIGHLIGHT_NAME = "TutorialOverlay"
+local LABEL_NAME = "TutorialOverlayLabel"
 
 local TutorialArrow = {}
 
 export type Handle = {
-    destroy: (self: Handle) -> (),
+	destroy: (self: Handle) -> (),
 }
 
-local function ensureGui(): ScreenGui
-    local pg = Players.LocalPlayer:WaitForChild("PlayerGui")
-    local gui = pg:FindFirstChild(TUTORIAL_GUI_NAME)
-    if gui then
-        return gui :: ScreenGui
-    end
-    local newGui = Instance.new("ScreenGui")
-    newGui.Name = TUTORIAL_GUI_NAME
-    newGui.ResetOnSpawn = false
-    newGui.IgnoreGuiInset = true
-    newGui.DisplayOrder = 80 -- ниже Tooltip (90) и Notifications (100), выше HUD (20)
-    newGui.Parent = pg
-    return newGui
+local function makeHandle(): Handle
+	return {
+		destroy = function(_self: Handle) end,
+	}
 end
 
-local function makeHandle(): Handle
-    return {
-        destroy = function(_self: Handle) end,
-    }
+local function goalImage(): string
+	local pin = UiAssets.image("tutorial_goal_pin")
+	if pin ~= "" then
+		return pin
+	end
+	return UiAssets.image("icon_tutorial_arrow")
+end
+
+local function upgRowAncestor(target: GuiObject): GuiObject?
+	local parent = target.Parent
+	if parent and parent:IsA("GuiObject") and string.sub(parent.Name, 1, 7) == "UpgRow_" then
+		return parent :: GuiObject
+	end
+	return nil
+end
+
+local function clearTutorialChrome(target: GuiObject)
+	local existing = target:FindFirstChild(HIGHLIGHT_NAME)
+	if existing then
+		existing:Destroy()
+	end
+	local label = target:FindFirstChild(LABEL_NAME)
+	if label then
+		label:Destroy()
+	end
+end
+
+function TutorialArrow.clearGuiChrome(target: GuiObject)
+	clearTutorialChrome(target)
+	local row = upgRowAncestor(target)
+	if row then
+		clearTutorialChrome(row)
+	end
+end
+
+function TutorialArrow.sweepHudChrome(hud: Instance)
+	for _, desc in hud:GetDescendants() do
+		if desc.Name == HIGHLIGHT_NAME or desc.Name == LABEL_NAME then
+			desc:Destroy()
+		end
+	end
 end
 
 local function pointAtGui(target: GuiObject, text: string): Handle
-    local gui = ensureGui()
+	TutorialArrow.clearGuiChrome(target)
 
-    local overlay = Instance.new("Frame")
-    overlay.Name = "TutorialOverlay"
-    overlay.BackgroundColor3 = GOLD
-    overlay.BackgroundTransparency = 0.85
-    overlay.BorderSizePixel = 0
-    overlay.Active = false
-    overlay.ZIndex = 5
-    overlay.Size = UDim2.fromOffset(target.AbsoluteSize.X + 8, target.AbsoluteSize.Y + 8)
-    overlay.Position = UDim2.fromOffset(target.AbsolutePosition.X - 4, target.AbsolutePosition.Y - 4)
-    overlay.Parent = gui
+	local overlay = Instance.new("Frame")
+	overlay.Name = HIGHLIGHT_NAME
+	overlay.AnchorPoint = Vector2.new(0.5, 0.5)
+	overlay.Position = UDim2.fromScale(0.5, 0.5)
+	overlay.Size = UDim2.new(1, 14, 1, 14)
+	overlay.BackgroundColor3 = GOLD
+	overlay.BackgroundTransparency = 0.88
+	overlay.BorderSizePixel = 0
+	overlay.Active = false
+	overlay.ZIndex = math.max(target.ZIndex + 4, 12)
+	overlay.Parent = target
 
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 10)
-    corner.Parent = overlay
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 10)
+	corner.Parent = overlay
 
-    local stroke = Instance.new("UIStroke")
-    stroke.Color = GOLD
-    stroke.Thickness = PULSE_THIN
-    stroke.Transparency = 0
-    stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-    stroke.Parent = overlay
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = GOLD
+	stroke.Thickness = 2.2
+	stroke.Transparency = 0.08
+	stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	stroke.Parent = overlay
 
-    -- Подсказывающий label рядом с подсветкой.
-    local labelFrame = Instance.new("Frame")
-    labelFrame.Name = "Label"
-    labelFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 28)
-    labelFrame.BackgroundTransparency = 0.05
-    labelFrame.BorderSizePixel = 0
-    labelFrame.Active = false
-    labelFrame.ZIndex = 6
-    labelFrame.AutomaticSize = Enum.AutomaticSize.XY
-    labelFrame.Size = UDim2.fromOffset(0, 0)
-    labelFrame.Parent = gui
+	local row = upgRowAncestor(target)
+	local buyBtn = if target.Name == "BuyButton" then target else nil
 
-    Instance.new("UICorner", labelFrame).CornerRadius = UDim.new(0, 8)
-    local lblStroke = Instance.new("UIStroke")
-    lblStroke.Color = GOLD
-    lblStroke.Thickness = 2
-    lblStroke.Transparency = 0.1
-    lblStroke.Parent = labelFrame
+	local labelFrame = Instance.new("Frame")
+	labelFrame.Name = LABEL_NAME
+	if buyBtn and row then
+		labelFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+		labelFrame.Position = UDim2.new(
+			buyBtn.Position.X.Scale,
+			buyBtn.Position.X.Offset + math.floor(buyBtn.Size.X.Offset * 0.5),
+			buyBtn.Position.Y.Scale,
+			buyBtn.Position.Y.Offset + math.floor(buyBtn.Size.Y.Offset * 0.5)
+		)
+		labelFrame.Parent = row
+	elseif buyBtn then
+		labelFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+		labelFrame.Position = UDim2.fromScale(0.5, 0.5)
+		labelFrame.Parent = buyBtn
+	else
+		labelFrame.AnchorPoint = Vector2.new(0.5, 1)
+		labelFrame.Position = UDim2.new(0.5, 0, 0, -10)
+		labelFrame.Parent = target
+	end
+	labelFrame.BackgroundColor3 = Color3.fromRGB(10, 12, 22)
+	labelFrame.BackgroundTransparency = 0.06
+	labelFrame.BorderSizePixel = 0
+	labelFrame.Active = false
+	labelFrame.AutomaticSize = Enum.AutomaticSize.XY
+	labelFrame.Size = UDim2.fromOffset(0, 0)
+	local labelHost = labelFrame.Parent :: GuiObject
+	labelFrame.ZIndex = math.max(labelHost.ZIndex + 6, 16)
 
-    local lblPad = Instance.new("UIPadding")
-    lblPad.PaddingTop = UDim.new(0, 8)
-    lblPad.PaddingBottom = UDim.new(0, 8)
-    lblPad.PaddingLeft = UDim.new(0, 12)
-    lblPad.PaddingRight = UDim.new(0, 12)
-    lblPad.Parent = labelFrame
+	Instance.new("UICorner", labelFrame).CornerRadius = UDim.new(0, 10)
+	local lblStroke = Instance.new("UIStroke")
+	lblStroke.Color = GOLD
+	lblStroke.Thickness = 1.5
+	lblStroke.Transparency = 0.2
+	lblStroke.Parent = labelFrame
 
-    local labelText = Instance.new("TextLabel")
-    labelText.BackgroundTransparency = 1
-    labelText.AutomaticSize = Enum.AutomaticSize.XY
-    labelText.Size = UDim2.fromOffset(0, 0)
-    labelText.Font = Enum.Font.GothamBold
-    labelText.TextSize = 16
-    labelText.TextColor3 = Color3.fromRGB(255, 240, 200)
-    labelText.TextXAlignment = Enum.TextXAlignment.Left
-    labelText.RichText = true
-    labelText.Text = "▶  " .. text
-    labelText.Parent = labelFrame
+	local lblPad = Instance.new("UIPadding")
+	lblPad.PaddingTop = UDim.new(0, 6)
+	lblPad.PaddingBottom = UDim.new(0, 6)
+	lblPad.PaddingLeft = UDim.new(0, 10)
+	lblPad.PaddingRight = UDim.new(0, 10)
+	lblPad.Parent = labelFrame
 
-    -- Pulse stroke thickness через TweenService — Reverses = true даёт
-    -- симметричный «дышащий» эффект.
-    local pulseTween = TweenService:Create(
-        stroke,
-        TweenInfo.new(PULSE_DURATION, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
-        { Thickness = PULSE_THICK }
-    )
-    pulseTween:Play()
+	local labelText = Instance.new("TextLabel")
+	labelText.BackgroundTransparency = 1
+	labelText.AutomaticSize = Enum.AutomaticSize.XY
+	labelText.Size = UDim2.fromOffset(0, 0)
+	labelText.Font = Enum.Font.GothamBold
+	labelText.TextSize = 14
+	labelText.TextColor3 = GOLD_HI
+	labelText.TextXAlignment = Enum.TextXAlignment.Left
+	labelText.Text = text
+	labelText.Parent = labelFrame
 
-    -- Следим за позицией / размером target: HUD может скрываться
-    -- (panelOpen=false → target вне экрана) или анимировать размер.
-    local renderConn: RBXScriptConnection
-    renderConn = RunService.RenderStepped:Connect(function()
-        if not target.Parent then
-            overlay.Visible = false
-            labelFrame.Visible = false
-            return
-        end
-        local size = target.AbsoluteSize
-        local pos = target.AbsolutePosition
-        if size.X <= 0 or size.Y <= 0 then
-            overlay.Visible = false
-            labelFrame.Visible = false
-            return
-        end
-        overlay.Visible = true
-        labelFrame.Visible = true
-        overlay.Size = UDim2.fromOffset(size.X + 8, size.Y + 8)
-        overlay.Position = UDim2.fromOffset(pos.X - 4, pos.Y - 4)
+	local pulseTween = TweenService:Create(
+		stroke,
+		TweenInfo.new(0.55, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
+		{ Thickness = 3.4, Transparency = 0.32 }
+	)
+	pulseTween:Play()
 
-        -- Размещаем label: справа от элемента, если хватает места,
-        -- иначе снизу под подсветкой.
-        local camera = workspace.CurrentCamera
-        local viewport = if camera then camera.ViewportSize else Vector2.new(1024, 768)
-        local lblSize = labelFrame.AbsoluteSize
-        if lblSize.X < 10 then
-            lblSize = Vector2.new(160, 36)
-        end
-        local lx = pos.X + size.X + 12
-        local ly = pos.Y + size.Y / 2 - lblSize.Y / 2
-        if lx + lblSize.X > viewport.X - 8 then
-            lx = pos.X + size.X / 2 - lblSize.X / 2
-            ly = pos.Y - lblSize.Y - 12
-            if ly < 8 then
-                ly = pos.Y + size.Y + 12
-            end
-        end
-        lx = math.clamp(lx, 8, viewport.X - lblSize.X - 8)
-        ly = math.clamp(ly, 8, viewport.Y - lblSize.Y - 8)
-        labelFrame.Position = UDim2.fromOffset(math.floor(lx), math.floor(ly))
-    end)
-
-    local destroyed = false
-    return {
-        destroy = function(_self: Handle)
-            if destroyed then return end
-            destroyed = true
-            if renderConn then renderConn:Disconnect() end
-            pulseTween:Cancel()
-            overlay:Destroy()
-            labelFrame:Destroy()
-        end,
-    }
+	local destroyed = false
+	local labelRow = if buyBtn and row then row else nil
+	return {
+		destroy = function(_self: Handle)
+			if destroyed then
+				return
+			end
+			destroyed = true
+			pulseTween:Cancel()
+			if overlay.Parent then
+				overlay:Destroy()
+			end
+			if labelFrame.Parent then
+				labelFrame:Destroy()
+			end
+			if labelRow then
+				clearTutorialChrome(labelRow)
+			end
+		end,
+	}
 end
 
 local function pointAtPart(target: BasePart, text: string): Handle
-    local billboard = Instance.new("BillboardGui")
-    billboard.Name = "TutorialArrow"
-    billboard.Size = UDim2.fromOffset(220, 140)
-    billboard.StudsOffset = Vector3.new(0, 4, 0)
-    billboard.AlwaysOnTop = true
-    billboard.LightInfluence = 0
-    billboard.MaxDistance = 500
-    billboard.Adornee = target
-    billboard.Parent = target
+	local folder = Instance.new("Folder")
+	folder.Name = "TutorialWorldBeacon"
+	folder.Parent = target
 
-    local arrow = Instance.new("TextLabel")
-    arrow.Size = UDim2.new(1, 0, 0, 70)
-    arrow.Position = UDim2.fromOffset(0, 0)
-    arrow.BackgroundTransparency = 1
-    arrow.Text = "⬇"
-    arrow.Font = Enum.Font.GothamBlack
-    arrow.TextSize = 56
-    arrow.TextColor3 = GOLD
-    arrow.TextStrokeColor3 = GOLD_DARK
-    arrow.TextStrokeTransparency = 0
-    arrow.Parent = billboard
+	local billboard = Instance.new("BillboardGui")
+	billboard.Name = "TutorialArrow"
+	billboard.Size = UDim2.fromOffset(140, 140)
+	billboard.StudsOffset = Vector3.new(0, 5.5, 0)
+	billboard.AlwaysOnTop = true
+	billboard.LightInfluence = 0
+	billboard.MaxDistance = 650
+	billboard.Adornee = target
+	billboard.Parent = folder
 
-    local labelBg = Instance.new("Frame")
-    labelBg.Size = UDim2.new(1, -20, 0, 50)
-    labelBg.Position = UDim2.new(0, 10, 0, 76)
-    labelBg.BackgroundColor3 = Color3.fromRGB(15, 15, 28)
-    labelBg.BackgroundTransparency = 0.05
-    labelBg.BorderSizePixel = 0
-    labelBg.Parent = billboard
-    Instance.new("UICorner", labelBg).CornerRadius = UDim.new(0, 8)
-    local stroke = Instance.new("UIStroke", labelBg)
-    stroke.Color = GOLD
-    stroke.Thickness = 2
+	local pin = Instance.new("ImageLabel")
+	pin.Size = UDim2.fromScale(1, 1)
+	pin.BackgroundTransparency = 1
+	pin.Image = goalImage()
+	pin.ScaleType = Enum.ScaleType.Fit
+	pin.Parent = billboard
 
-    local label = Instance.new("TextLabel")
-    label.Size = UDim2.fromScale(1, 1)
-    label.BackgroundTransparency = 1
-    label.Text = text
-    label.Font = Enum.Font.GothamBold
-    label.TextSize = 18
-    label.TextColor3 = Color3.fromRGB(255, 240, 200)
-    label.TextWrapped = true
-    label.Parent = labelBg
+	local labelBg = Instance.new("Frame")
+	labelBg.Size = UDim2.new(1, -12, 0, 40)
+	labelBg.Position = UDim2.new(0, 6, 1, 4)
+	labelBg.BackgroundColor3 = Color3.fromRGB(10, 12, 22)
+	labelBg.BackgroundTransparency = 0.08
+	labelBg.BorderSizePixel = 0
+	labelBg.Parent = billboard
+	Instance.new("UICorner", labelBg).CornerRadius = UDim.new(0, 10)
+	local stroke = Instance.new("UIStroke", labelBg)
+	stroke.Color = GOLD
+	stroke.Thickness = 1.5
+	stroke.Transparency = 0.25
 
-    -- Bounce-tween по StudsOffset.Y — эмулирует подскакивающую стрелку.
-    local baseOffset = billboard.StudsOffset
-    local bounceTween = TweenService:Create(
-        billboard,
-        TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut, -1, true),
-        { StudsOffset = baseOffset + Vector3.new(0, 0.6, 0) }
-    )
-    bounceTween:Play()
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.fromScale(1, 1)
+	label.BackgroundTransparency = 1
+	label.Text = text
+	label.Font = Enum.Font.GothamBold
+	label.TextSize = 15
+	label.TextColor3 = GOLD_HI
+	label.TextWrapped = true
+	label.Parent = labelBg
 
-    local destroyed = false
-    return {
-        destroy = function(_self: Handle)
-            if destroyed then return end
-            destroyed = true
-            bounceTween:Cancel()
-            billboard:Destroy()
-        end,
-    }
+	local bounceTween = TweenService:Create(
+		billboard,
+		TweenInfo.new(0.5, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
+		{ StudsOffset = Vector3.new(0, 6.2, 0) }
+	)
+	bounceTween:Play()
+
+	local destroyed = false
+	return {
+		destroy = function(_self: Handle)
+			if destroyed then
+				return
+			end
+			destroyed = true
+			bounceTween:Cancel()
+			folder:Destroy()
+		end,
+	}
 end
 
 function TutorialArrow.pointAt(target: any, text: string): Handle
-    if typeof(target) ~= "Instance" then
-        return makeHandle()
-    end
-    if target:IsA("GuiObject") then
-        return pointAtGui(target :: GuiObject, text)
-    end
-    if target:IsA("BasePart") then
-        return pointAtPart(target :: BasePart, text)
-    end
-    return makeHandle()
+	if typeof(target) ~= "Instance" then
+		return makeHandle()
+	end
+	if target:IsA("GuiObject") then
+		return pointAtGui(target :: GuiObject, text)
+	end
+	if target:IsA("BasePart") then
+		return pointAtPart(target :: BasePart, text)
+	end
+	return makeHandle()
 end
 
 return TutorialArrow

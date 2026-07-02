@@ -1,7 +1,13 @@
 {
     "name": "deep-digger",
     "globIgnorePaths": [
-        "**/node_modules/*"
+        "**/node_modules/*",
+        "**/__pycache__/**",
+        "**/*.py",
+        "assets/ui/__pycache__/**",
+        "assets/ui/ores/_raw/**",
+        "assets/ui/ores/README.md",
+        "assets/ui/ores/capture_positions.json"
     ],
     "tree": {
         "$className": "DataModel",
@@ -13,6 +19,9 @@
             },
             "shared": {
                 "$path": "src/shared"
+            },
+            "uiAssets": {
+                "$path": "assets/ui"
             }
         },
         "ServerScriptService": {

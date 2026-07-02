@@ -36,7 +36,7 @@ function MiningLoot.tryAddOre(
     fortuneBonus: boolean
 ): AddOreResult
     local amount = baseAmount + (if fortuneBonus then 1 else 0)
-    local capacity = UpgradeLogic.inventoryCapacity(playerData.inventoryLevel or 1)
+    local capacity = UpgradeLogic.inventoryCapacity(playerData.inventoryLevel or 1, playerData.rebirths or 0)
     playerData.inventory = playerData.inventory or {}
 
     local current = InventoryUtil.totalCount(playerData.inventory)

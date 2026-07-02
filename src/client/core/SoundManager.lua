@@ -16,6 +16,7 @@ local Workspace = game:GetService("Workspace")
 local ContentProvider = game:GetService("ContentProvider")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Debris = game:GetService("Debris")
+local TweenService = game:GetService("TweenService")
 
 local SoundDatabase = require(ReplicatedStorage:WaitForChild("shared").data.SoundDatabase)
 local Logger = require(ReplicatedStorage:WaitForChild("shared").util.Logger)
@@ -25,6 +26,7 @@ local SoundManager = {}
 local FOLDER_NAME = "DeepDigger_Sounds"
 local SFX_GROUP = "DD_SFX"
 local UI_GROUP = "DD_UI"
+local MUSIC_GROUP = "DD_Music"
 
 local log = Logger.new("SoundManager")
 
@@ -32,6 +34,7 @@ local _started = false
 local _folder: Folder? = nil
 local _sfxGroup: SoundGroup? = nil
 local _uiGroup: SoundGroup? = nil
+local _musicGroup: SoundGroup? = nil
 local _cache: { [string]: Sound } = {}
 -- Phase 7 TODO playtest: некоторые soundIds в SoundDatabase «битые» —
 -- Roblox в 2024+ ужесточил audio-модерацию, часть старых IDs больше не
@@ -42,6 +45,9 @@ local _cache: { [string]: Sound } = {}
 -- silently no-op. Список broken event'ов попадает в один warning на старте,
 -- чтобы было видно ЧТО менять в SoundDatabase.
 local _broken: { [string]: boolean } = {}
+local _loopSound: Sound? = nil
+local _loopEventId: string? = nil
+local _loopFadeTween: Tween? = nil
 
 local function ensureGroup(name: string): SoundGroup
     local existing = SoundService:FindFirstChild(name)
@@ -72,7 +78,9 @@ local function buildSound(eventId: string, entry: SoundDatabase.SoundEntry): Sou
     sound.RollOffMinDistance = 10
     sound.RollOffMaxDistance = 120
     local cat = SoundDatabase.getCategory(eventId)
-    sound.SoundGroup = if cat == "ui" then _uiGroup else _sfxGroup
+    sound.SoundGroup = if cat == "ui" then _uiGroup
+        elseif cat == "music" then _musicGroup
+        else _sfxGroup
     return sound
 end
 
@@ -84,6 +92,8 @@ function SoundManager.start(parent: Instance?)
 
     _sfxGroup = ensureGroup(SFX_GROUP)
     _uiGroup = ensureGroup(UI_GROUP)
+    _musicGroup = ensureGroup(MUSIC_GROUP)
+    _musicGroup.Volume = 0.85
 
     local holder = parent or SoundService
     local existing = holder:FindFirstChild(FOLDER_NAME)
@@ -239,7 +249,7 @@ function SoundManager.playForOre(
     if eventType == "hit" then
         eventId = SoundDatabase.hitEventForRarity(r)
     elseif eventType == "break" then
-        eventId = SoundDatabase.breakEventForRarity(r)
+        eventId = SoundDatabase.breakEventForOre(oreId, r)
     else
         return
     end
@@ -252,7 +262,74 @@ function SoundManager.setVolume(category: string, volume: number)
         _sfxGroup.Volume = volume
     elseif category == "ui" and _uiGroup then
         _uiGroup.Volume = volume
+    elseif category == "music" and _musicGroup then
+        _musicGroup.Volume = volume
     end
+end
+
+-- Ambient loop для слоёв. Отдельный инстанс, не трогает one-shot кэш.
+-- targetVolume — абсолютная громкость; если nil, берётся из SoundDatabase.
+function SoundManager.playLoop(eventId: string, targetVolume: number?)
+	if not _started then
+		return
+	end
+	if _loopEventId == eventId and _loopSound and _loopSound.IsPlaying then
+		return
+	end
+
+	-- Всегда гасим предыдущий loop при смене трека (в т.ч. если новый broken).
+	if _loopSound then
+		SoundManager.stopLoop(0.4)
+	end
+
+	if _broken[eventId] then
+		return
+	end
+
+	local entry = SoundDatabase.get(eventId)
+	if not entry or not _folder then
+		return
+	end
+
+	local sound = buildSound(eventId, entry)
+    sound.Looped = entry.loop == true
+    sound.Volume = 0
+    if entry.playbackSpeed then
+        sound.PlaybackSpeed = entry.playbackSpeed
+    end
+    sound.Parent = _folder
+    sound:Play()
+
+    local target = targetVolume or entry.volume
+    if _loopFadeTween then _loopFadeTween:Cancel() end
+    _loopFadeTween = TweenService:Create(sound, TweenInfo.new(0.8, Enum.EasingStyle.Quad), { Volume = target })
+    _loopFadeTween:Play()
+
+    _loopSound = sound
+    _loopEventId = eventId
+end
+
+function SoundManager.stopLoop(fadeSec: number?)
+    if not _loopSound then return end
+    local sound = _loopSound
+    _loopSound = nil
+    _loopEventId = nil
+    if _loopFadeTween then
+        _loopFadeTween:Cancel()
+        _loopFadeTween = nil
+    end
+    local fade = fadeSec or 0.5
+    if fade <= 0 then
+        sound:Stop()
+        sound:Destroy()
+        return
+    end
+    local tw = TweenService:Create(sound, TweenInfo.new(fade, Enum.EasingStyle.Quad), { Volume = 0 })
+    tw:Play()
+    tw.Completed:Connect(function()
+        sound:Stop()
+        sound:Destroy()
+    end)
 end
 
 return SoundManager

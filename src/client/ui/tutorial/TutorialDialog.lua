@@ -34,9 +34,16 @@
 --   * При destroy → slide-out + fade-out + Destroy.
 
 local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+
+local UiAssets = require(ReplicatedStorage:WaitForChild("shared").data.UiAssets)
+local ViewportLayout = require(script.Parent.Parent.util.ViewportLayout)
+local UiScreen = require(script.Parent.Parent.util.UiScreen)
+
+local px = ViewportLayout.px
 
 local TUTORIAL_GUI_NAME = "DeepDigger_Tutorial"
 local TYPE_SPEED_CHARS_PER_SEC = 42
@@ -48,6 +55,20 @@ local KIND_COLORS = {
     finale = Color3.fromRGB(220, 120, 255),   -- mythic
 }
 local DEFAULT_COLOR = KIND_COLORS.intro
+local DIALOG_H = 118
+
+local function dialogHeight(): number
+    return ViewportLayout.px(DIALOG_H)
+end
+
+local function dialogWidth(): number
+    local maxW = math.floor(ViewportLayout.playableWidth() * 0.92 + 0.5)
+    return math.clamp(maxW, ViewportLayout.px(260), ViewportLayout.px(560))
+end
+
+local function dialogRestY(): number
+    return -ViewportLayout.bottomChromeInset() - 8
+end
 
 local TutorialDialog = {}
 
@@ -68,17 +89,7 @@ export type Handle = {
 
 local function ensureGui(): ScreenGui
     local pg = Players.LocalPlayer:WaitForChild("PlayerGui")
-    local gui = pg:FindFirstChild(TUTORIAL_GUI_NAME)
-    if gui then
-        return gui :: ScreenGui
-    end
-    local newGui = Instance.new("ScreenGui")
-    newGui.Name = TUTORIAL_GUI_NAME
-    newGui.ResetOnSpawn = false
-    newGui.IgnoreGuiInset = true
-    newGui.DisplayOrder = 80
-    newGui.Parent = pg
-    return newGui
+    return UiScreen.ensure(pg, TUTORIAL_GUI_NAME, "tutorial")
 end
 
 local function colorFor(kind: string?): Color3
@@ -90,7 +101,7 @@ end
 
 local function buildFrame(): {
     root: Frame,
-    avatar: TextLabel,
+    avatar: ImageLabel,
     avatarRing: UIStroke,
     nameLabel: TextLabel,
     textLabel: TextLabel,
@@ -101,10 +112,9 @@ local function buildFrame(): {
 }
     local root = Instance.new("Frame")
     root.Name = "TutorialDialog"
-    root.Size = UDim2.fromOffset(640, 150)
+    root.Size = UDim2.fromOffset(dialogWidth(), dialogHeight())
     root.AnchorPoint = Vector2.new(0.5, 1)
-    -- Стартовая позиция: чуть ниже экрана, прилетит вверх.
-    root.Position = UDim2.new(0.5, 0, 1, 170)
+    root.Position = UDim2.new(0.5, 0, 1, 200)
     root.BackgroundColor3 = Color3.fromRGB(14, 14, 28)
     root.BackgroundTransparency = 0.08
     root.BorderSizePixel = 0
@@ -112,12 +122,12 @@ local function buildFrame(): {
     root.Active = false
 
     local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 14)
+    corner.CornerRadius = UDim.new(0, px(14))
     corner.Parent = root
 
     local stroke = Instance.new("UIStroke")
     stroke.Color = DEFAULT_COLOR
-    stroke.Thickness = 2.5
+    stroke.Thickness = math.max(1, px(2.5))
     stroke.Transparency = 0.1
     stroke.Parent = root
 
@@ -134,8 +144,8 @@ local function buildFrame(): {
 
     -- ===== Avatar (левая колонка) =====
     local avatarFrame = Instance.new("Frame")
-    avatarFrame.Size = UDim2.fromOffset(86, 86)
-    avatarFrame.Position = UDim2.fromOffset(14, 14)
+    avatarFrame.Size = UDim2.fromOffset(px(86), px(86))
+    avatarFrame.Position = UDim2.fromOffset(px(14), px(14))
     avatarFrame.BackgroundColor3 = Color3.fromRGB(28, 28, 50)
     avatarFrame.BorderSizePixel = 0
     avatarFrame.ZIndex = 12
@@ -148,27 +158,25 @@ local function buildFrame(): {
 
     local avatarRing = Instance.new("UIStroke")
     avatarRing.Color = DEFAULT_COLOR
-    avatarRing.Thickness = 3
+    avatarRing.Thickness = math.max(1, px(3))
     avatarRing.Transparency = 0
     avatarRing.Parent = avatarFrame
 
-    local avatar = Instance.new("TextLabel")
+    local avatar = Instance.new("ImageLabel")
     avatar.Size = UDim2.fromScale(1, 1)
     avatar.BackgroundTransparency = 1
-    avatar.Text = ""
-    avatar.Font = Enum.Font.GothamBlack
-    avatar.TextSize = 48
-    avatar.TextColor3 = Color3.fromRGB(255, 240, 200)
+    avatar.Image = UiAssets.image("upg_pickaxe")
+    avatar.ScaleType = Enum.ScaleType.Fit
     avatar.ZIndex = 13
     avatar.Parent = avatarFrame
 
     -- ===== Текстовая колонка =====
     local nameLabel = Instance.new("TextLabel")
-    nameLabel.Size = UDim2.new(1, -130, 0, 22)
-    nameLabel.Position = UDim2.fromOffset(112, 16)
+    nameLabel.Size = UDim2.new(1, -px(130), 0, px(22))
+    nameLabel.Position = UDim2.fromOffset(px(112), px(16))
     nameLabel.BackgroundTransparency = 1
     nameLabel.Font = Enum.Font.GothamBlack
-    nameLabel.TextSize = 16
+    nameLabel.TextSize = ViewportLayout.textPx(16)
     nameLabel.TextColor3 = DEFAULT_COLOR
     nameLabel.TextXAlignment = Enum.TextXAlignment.Left
     nameLabel.Text = ""
@@ -176,11 +184,11 @@ local function buildFrame(): {
     nameLabel.Parent = root
 
     local textLabel = Instance.new("TextLabel")
-    textLabel.Size = UDim2.new(1, -130, 0, 70)
-    textLabel.Position = UDim2.fromOffset(112, 42)
+    textLabel.Size = UDim2.new(1, -px(130), 0, px(70))
+    textLabel.Position = UDim2.fromOffset(px(112), px(42))
     textLabel.BackgroundTransparency = 1
     textLabel.Font = Enum.Font.Gotham
-    textLabel.TextSize = 15
+    textLabel.TextSize = ViewportLayout.textPx(15)
     textLabel.TextColor3 = Color3.fromRGB(232, 230, 220)
     textLabel.TextXAlignment = Enum.TextXAlignment.Left
     textLabel.TextYAlignment = Enum.TextYAlignment.Top
@@ -192,14 +200,14 @@ local function buildFrame(): {
 
     -- ===== Кнопки =====
     local advanceBtn = Instance.new("TextButton")
-    advanceBtn.Size = UDim2.fromOffset(140, 30)
+    advanceBtn.Size = UDim2.fromOffset(px(140), px(30))
     advanceBtn.AnchorPoint = Vector2.new(1, 1)
-    advanceBtn.Position = UDim2.new(1, -54, 1, -12)
+    advanceBtn.Position = UDim2.new(1, -px(54), 1, -px(12))
     advanceBtn.BackgroundColor3 = DEFAULT_COLOR
     advanceBtn.BorderSizePixel = 0
-    advanceBtn.Text = "Понятно  ✓"
+    advanceBtn.Text = "Понятно"
     advanceBtn.Font = Enum.Font.GothamBold
-    advanceBtn.TextSize = 14
+    advanceBtn.TextSize = ViewportLayout.textPx(14)
     advanceBtn.TextColor3 = Color3.fromRGB(20, 20, 36)
     advanceBtn.AutoButtonColor = true
     advanceBtn.ZIndex = 14
@@ -207,19 +215,19 @@ local function buildFrame(): {
     advanceBtn.Parent = root
 
     local advBtnCorner = Instance.new("UICorner")
-    advBtnCorner.CornerRadius = UDim.new(0, 8)
+    advBtnCorner.CornerRadius = UDim.new(0, px(8))
     advBtnCorner.Parent = advanceBtn
 
     local skipBtn = Instance.new("TextButton")
-    skipBtn.Size = UDim2.fromOffset(34, 30)
+    skipBtn.Size = UDim2.fromOffset(px(34), px(30))
     skipBtn.AnchorPoint = Vector2.new(1, 1)
-    skipBtn.Position = UDim2.new(1, -12, 1, -12)
+    skipBtn.Position = UDim2.new(1, -px(12), 1, -px(12))
     skipBtn.BackgroundColor3 = Color3.fromRGB(60, 30, 30)
     skipBtn.BackgroundTransparency = 0.2
     skipBtn.BorderSizePixel = 0
-    skipBtn.Text = "✕"
+    skipBtn.Text = "X"
     skipBtn.Font = Enum.Font.GothamBold
-    skipBtn.TextSize = 16
+    skipBtn.TextSize = ViewportLayout.textPx(16)
     skipBtn.TextColor3 = Color3.fromRGB(220, 180, 180)
     skipBtn.AutoButtonColor = true
     skipBtn.ZIndex = 14
@@ -227,7 +235,7 @@ local function buildFrame(): {
     skipBtn.Parent = root
 
     local skipBtnCorner = Instance.new("UICorner")
-    skipBtnCorner.CornerRadius = UDim.new(0, 8)
+    skipBtnCorner.CornerRadius = UDim.new(0, px(8))
     skipBtnCorner.Parent = skipBtn
 
     local skipBtnStroke = Instance.new("UIStroke")
@@ -307,7 +315,7 @@ end
 
 local function applyOptions(state: any, opts: Options)
     local parts = state.parts
-    parts.avatar.Text = opts.speaker or ""
+    parts.avatar.Image = UiAssets.resolve(opts.speaker) ~= "" and UiAssets.resolve(opts.speaker) or UiAssets.image("upg_pickaxe")
     parts.nameLabel.Text = opts.name or ""
 
     local color = colorFor(opts.kind)
@@ -348,11 +356,12 @@ function TutorialDialog.show(opts: Options): Handle
     }
 
     -- Slide-in.
-    parts.root.Position = UDim2.new(0.5, 0, 1, 170)
+    parts.root.Size = UDim2.fromOffset(dialogWidth(), dialogHeight())
+    parts.root.Position = UDim2.new(0.5, 0, 1, 200)
     TweenService:Create(
         parts.root,
         TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-        { Position = UDim2.new(0.5, 0, 1, -28) }
+        { Position = UDim2.new(0.5, 0, 1, dialogRestY()) }
     ):Play()
 
     applyOptions(state, opts)
@@ -401,7 +410,7 @@ function TutorialDialog.show(opts: Options): Handle
         local slideOut = TweenService:Create(
             root,
             TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
-            { Position = UDim2.new(0.5, 0, 1, 170), BackgroundTransparency = 1 }
+            { Position = UDim2.new(0.5, 0, 1, 200), BackgroundTransparency = 1 }
         )
         slideOut:Play()
         slideOut.Completed:Connect(function()

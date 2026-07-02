@@ -1,31 +1,20 @@
 --!strict
--- PetsPanel.lua — Phase 11 (Pets MVP).
---
--- Контент 6-го таба HUD (🐾 ПИТОМЦЫ). Состав:
---   * Header: индикатор активных бустов от экипированных петов (PetLogic.summary).
---   * Hatch-секция: Basic Egg + кнопки «Открыть 1×» / «Открыть 10×».
---   * Грид owned-петов (PetCard) с equip/unequip по клику.
---
--- КРИТИЧНО (грабли Фазы 10): грид петов собирается через s:Computed ВНУТРИ
--- дерева (в [Children] контейнера-грида), а НЕ инстансами в цикле до s:New —
--- иначе в Fusion 0.3 карточки не парентятся. Паттерн идентичен InventoryPanel /
--- LeaderboardPanel.
---
--- Hatch: Net:Invoke("HatchEgg", count) в task.spawn (не yield'им в обработчике
--- клика). На success → PetHatchFX.play(hatched) + sell-звук. Тосты ошибок —
--- через Notification.
+-- PetsPanel — вкладка «Питомцы»: только экипировка и активные бонусы.
+-- Покупка яиц — у машин в Workspace (EggShopModal через EggMachines).
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Fusion = require(ReplicatedStorage:WaitForChild("Packages").Fusion)
 local Net = require(ReplicatedStorage:WaitForChild("Packages").Net)
-local Constants = require(ReplicatedStorage:WaitForChild("shared").constants)
 
 local ScopeFactory = require(script.Parent.Parent.ScopeFactory)
 local HudStateModule = require(script.Parent.Parent.HudState)
 local theme = require(script.Parent.Parent.theme)
-local Formatters = require(script.Parent.Parent.formatters)
+local PanelScale = require(script.Parent.Parent.PanelScale)
 local PetCard = require(script.Parent.Parent.components.PetCard)
--- ui/hud/panels → ui/hud → ui → core / ui-modules.
+local BuffEffectChip = require(script.Parent.Parent.components.BuffEffectChip)
+local UiAssets = require(ReplicatedStorage:WaitForChild("shared").data.UiAssets)
+local Constants = require(ReplicatedStorage:WaitForChild("shared").constants)
+local Formatters = require(script.Parent.Parent.formatters)
 local SoundManager = require(script.Parent.Parent.Parent.Parent.core.SoundManager)
 local Notification = require(script.Parent.Parent.Parent.Notification)
 local PetHatchFX = require(script.Parent.Parent.Parent.PetHatchFX)
@@ -34,333 +23,437 @@ local OnEvent = Fusion.OnEvent
 local Children = Fusion.Children
 local peek = Fusion.peek
 local C = theme.C
+-- Десктоп: геометрия ×2 синхронно с ×2 текстом (gsc). Phone/tablet без изменений.
+local sc = PanelScale.gsc
+local text = PanelScale.text
 
 local PetsPanel = {}
 
-local function isEquippedUid(uid: string, equippedUids: { string }): boolean
-    for _, u in ipairs(equippedUids) do
-        if u == uid then
-            return true
-        end
-    end
-    return false
+-- P1.6 + P2.8: Desert Egg покупается за кристаллы прямо в панели питомцев.
+-- Серверный HatchEgg авторитетен (валидация/списание гемов), клиент только
+-- шлёт запрос и проигрывает PetHatchFX. eggId жёстко "desert" — единственное
+-- gem-яйцо на старте.
+local DESERT_EGG_ID = "desert"
+
+local function desertEggDef(): any?
+	local eggs = (Constants.PETS or {}).eggs or {}
+	return eggs[DESERT_EGG_ID]
 end
 
-local EGG = (Constants.PETS or {}).eggs and Constants.PETS.eggs.basic or { name = "Basic Egg", icon = "🥚", cost = 1000 }
-local HATCH_MAX = (Constants.PETS or {}).hatchBatchMax or 10
-
---[[
-    Выполнить hatch count яиц. Net:Invoke в task.spawn — не yield'им в клике.
-]]
-local function doHatch(state: HudStateModule.HudState, count: number, isBusy: any)
-    if peek(isBusy) then
-        return
-    end
-    local n = math.clamp(math.floor(count), 1, HATCH_MAX)
-    local cost = (EGG.cost or 0) * n
-    local coins = peek(state.coins) or 0
-    if coins < cost then
-        SoundManager.play("buy_fail")
-        Notification.show({
-            text = ("Не хватает %d монет на %d 🥚"):format(cost - coins, n),
-            icon = "🥚",
-            color = Color3.fromRGB(255, 140, 60),
-            duration = 2.5,
-        })
-        return
-    end
-
-    isBusy:set(true)
-    task.spawn(function()
-        local ok, result = pcall(function()
-            return Net:Invoke("HatchEgg", n)
-        end)
-        isBusy:set(false)
-        if not ok then
-            SoundManager.play("buy_fail")
-            Notification.show({
-                text = "Сетевая ошибка открытия яйца",
-                icon = "⚠",
-                color = Color3.fromRGB(255, 140, 60),
-                duration = 2.5,
-            })
-            return
-        end
-        if typeof(result) == "table" and result.success then
-            SoundManager.play("sell_success")
-            -- FX-ревил: PetHatchFX сам разрулит 1× и 10×. Падение FX не
-            -- срывает hatch — пет уже в профиле (сервер прислал PlayerStats).
-            pcall(function()
-                PetHatchFX.play(result.hatched)
-            end)
-            return
-        end
-        if typeof(result) == "table" and result.message then
-            SoundManager.play("buy_fail")
-            Notification.show({
-                text = result.message,
-                icon = "🥚",
-                color = Color3.fromRGB(255, 140, 60),
-                duration = 2.5,
-            })
-        end
-    end)
+local function hatchDesertWithGems(count: number, isBusy: any)
+	if peek(isBusy) then
+		return
+	end
+	isBusy:set(true)
+	SoundManager.play("ui_click")
+	task.spawn(function()
+		local ok, result = pcall(function()
+			return Net:Invoke("HatchEgg", DESERT_EGG_ID, count, "gems")
+		end)
+		isBusy:set(false)
+		if not ok then
+			SoundManager.play("buy_fail")
+			Notification.show({ text = "Сетевая ошибка", icon = "icon_warning", duration = 2.5 })
+			return
+		end
+		if typeof(result) == "table" and result.success then
+			SoundManager.play("sell_success")
+			local egg = desertEggDef()
+			pcall(function()
+				PetHatchFX.play(result.hatched, egg and egg.modelName)
+			end)
+			return
+		end
+		if typeof(result) == "table" and result.message then
+			SoundManager.play("buy_fail")
+			Notification.show({
+				text = result.message,
+				icon = "icon_gem",
+				color = Color3.fromRGB(255, 140, 60),
+				duration = 2.5,
+			})
+		end
+	end)
 end
 
 local function onTogglePet(uid: string, equipped: boolean)
-    task.spawn(function()
-        pcall(function()
-            if equipped then
-                Net:Invoke("UnequipPet", uid)
-            else
-                Net:Invoke("EquipPet", uid)
-            end
-        end)
-        SoundManager.play("ui_click")
-    end)
+	task.spawn(function()
+		pcall(function()
+			if equipped then
+				Net:Invoke("UnequipPet", uid)
+			else
+				Net:Invoke("EquipPet", uid)
+			end
+		end)
+		SoundManager.play("ui_click")
+	end)
 end
 
--- Header: индикатор бустов от экипированных петов.
 local function boostHeader(s: ScopeFactory.HudScope, state: HudStateModule.HudState)
-    return s:New("Frame")({
-        Name = "BoostHeader",
-        Size = UDim2.new(1, -8, 0, 64),
-        BackgroundColor3 = C.btnBg,
-        BorderSizePixel = 0,
-        LayoutOrder = 1,
-        [Children] = {
-            s:New("UICorner")({ CornerRadius = UDim.new(0, 8) }),
-            s:New("UIStroke")({ Color = C.gem, Thickness = 1.5, Transparency = 0.4 }),
-            s:New("TextLabel")({
-                Size = UDim2.new(1, -16, 0, 18),
-                Position = UDim2.new(0, 12, 0, 8),
-                BackgroundTransparency = 1,
-                Text = "🐾 АКТИВНЫЕ БОНУСЫ ПИТОМЦА",
-                TextSize = 12,
-                Font = Enum.Font.GothamBold,
-                TextColor3 = C.textLabel,
-                TextXAlignment = Enum.TextXAlignment.Left,
-                ZIndex = 2,
-            }),
-            s:New("TextLabel")({
-                Size = UDim2.new(1, -16, 0, 28),
-                Position = UDim2.new(0, 12, 0, 28),
-                BackgroundTransparency = 1,
-                Text = s:Computed(function(use)
-                    local fx = use(state.petEffects) or {}
-                    if (fx.equippedCount or 0) == 0 then
-                        return "Питомец не экипирован — нажми на карточку ниже"
-                    end
-                    local parts = {}
-                    if (fx.damage or 1) > 1 then
-                        table.insert(parts, ("⚔ +%d%% урон"):format(math.floor(((fx.damage or 1) - 1) * 100 + 0.5)))
-                    end
-                    if (fx.coin or 0) > 0 then
-                        table.insert(parts, ("💰 +%d%% монет"):format(math.floor((fx.coin or 0) * 100 + 0.5)))
-                    end
-                    if (fx.luck or 1) > 1 then
-                        table.insert(parts, ("✨ +%d%% удача"):format(math.floor(((fx.luck or 1) - 1) * 100 + 0.5)))
-                    end
-                    if (fx.multiMine or 0) > 0 then
-                        table.insert(parts, ("⛏ %d%% ×2 блока"):format(math.floor((fx.multiMine or 0) * 100 + 0.5)))
-                    end
-                    if #parts == 0 then
-                        return "Питомец экипирован"
-                    end
-                    return table.concat(parts, "   ")
-                end),
-                TextSize = 13,
-                Font = Enum.Font.GothamBold,
-                TextColor3 = C.gold,
-                TextXAlignment = Enum.TextXAlignment.Left,
-                TextWrapped = true,
-                ZIndex = 2,
-            }),
-        },
-    })
+	local chipRow = s:Computed(function(use)
+		local fx = use(state.petEffects) or {}
+		local children: { Instance } = {
+			s:New("UIListLayout")({
+				FillDirection = Enum.FillDirection.Horizontal,
+				Padding = PanelScale.pad(6),
+				SortOrder = Enum.SortOrder.LayoutOrder,
+				VerticalAlignment = Enum.VerticalAlignment.Center,
+				Wraps = true,
+			}),
+		}
+		if (fx.equippedCount or 0) == 0 then
+			children[#children + 1] = s:New("TextLabel")({
+				Size = UDim2.new(1, 0, 0, sc(28)),
+				BackgroundTransparency = 1,
+				Text = "Питомец не экипирован — нажми на карточку ниже",
+				TextSize = text(12),
+				Font = theme.FONT.body,
+				TextColor3 = C.textMuted,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				TextWrapped = true,
+				ZIndex = 2,
+			})
+			return children
+		end
+		local order = 0
+		local function addChip(kind: "damage" | "luck" | "coin" | "multiMine", text: string)
+			order += 1
+			children[#children + 1] = BuffEffectChip.create(s, {
+				kind = kind,
+				valueText = text,
+				layoutOrder = order,
+			})
+		end
+		if (fx.damage or 1) > 1.001 then
+			addChip("damage", ("+%d%% урон"):format(math.floor(((fx.damage or 1) - 1) * 100 + 0.5)))
+		end
+		if (fx.coin or 0) > 0.001 then
+			addChip("coin", ("+%d%% монет"):format(math.floor((fx.coin or 0) * 100 + 0.5)))
+		end
+		if (fx.luck or 1) > 1.001 then
+			addChip("luck", ("+%d%% удача"):format(math.floor(((fx.luck or 1) - 1) * 100 + 0.5)))
+		end
+		if (fx.multiMine or 0) > 0.001 then
+			addChip("multiMine", ("%d%% ×2"):format(math.floor((fx.multiMine or 0) * 100 + 0.5)))
+		end
+		if order == 0 then
+			children[#children + 1] = s:New("TextLabel")({
+				Size = UDim2.new(1, 0, 0, sc(28)),
+				BackgroundTransparency = 1,
+				Text = "Питомец экипирован",
+				TextSize = text(12),
+				Font = theme.FONT.body,
+				TextColor3 = C.textSub,
+				ZIndex = 2,
+			})
+		end
+		return children
+	end)
+
+	return s:New("Frame")({
+		Name = "BoostHeader",
+		Size = UDim2.new(1, -sc(8), 0, sc(78)),
+		BackgroundColor3 = C.btnBg,
+		BorderSizePixel = 0,
+		LayoutOrder = 1,
+		[Children] = {
+			s:New("UICorner")({ CornerRadius = UDim.new(0, sc(8)) }),
+			s:New("UIStroke")({ Color = C.gem, Thickness = sc(1.5), Transparency = 0.4 }),
+			s:New("ImageLabel")({
+				Size = UDim2.fromOffset(sc(18), sc(18)),
+				Position = UDim2.new(0, sc(12), 0, sc(10)),
+				BackgroundTransparency = 1,
+				Image = UiAssets.tab("pets"),
+				ScaleType = Enum.ScaleType.Fit,
+				ZIndex = 2,
+			}),
+			s:New("TextLabel")({
+				Size = UDim2.new(1, -sc(40), 0, sc(18)),
+				Position = UDim2.new(0, sc(34), 0, sc(10)),
+				BackgroundTransparency = 1,
+				Text = "АКТИВНЫЕ БОНУСЫ ПИТОМЦА",
+				TextSize = text(12),
+				Font = Enum.Font.GothamBold,
+				TextColor3 = C.textLabel,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				ZIndex = 2,
+			}),
+			s:New("Frame")({
+				Name = "ChipRow",
+				Size = UDim2.new(1, -sc(24), 0, sc(36)),
+				Position = UDim2.new(0, sc(12), 0, sc(34)),
+				BackgroundTransparency = 1,
+				BorderSizePixel = 0,
+				ZIndex = 2,
+				[Children] = chipRow,
+			}),
+		},
+	})
 end
 
--- Hatch-секция: яйцо + кнопки 1× / 10×.
-local function hatchSection(s: ScopeFactory.HudScope, state: HudStateModule.HudState, isBusy: any)
-    local function hatchButton(label: string, count: number, layoutOrder: number)
-        local hovered = s:Value(false)
-        local cost = (EGG.cost or 0) * count
-        local canAfford = s:Computed(function(use)
-            return (use(state.coins) or 0) >= cost
-        end)
-        return s:New("TextButton")({
-            Name = "HatchButton_" .. count,
-            Size = UDim2.new(0.5, -6, 1, 0),
-            LayoutOrder = layoutOrder,
-            AutoButtonColor = false,
-            BackgroundColor3 = s:Computed(function(use)
-                if use(isBusy) or not use(canAfford) then
-                    return C.btnDisabled
-                end
-                return use(hovered) and Color3.fromRGB(220, 180, 30) or C.gold
-            end),
-            BorderSizePixel = 0,
-            Text = ("%s  (%s 💰)"):format(label, Formatters.shortNumber(cost)),
-            TextSize = 15,
-            Font = Enum.Font.GothamBlack,
-            TextColor3 = s:Computed(function(use)
-                return if use(canAfford) and not use(isBusy)
-                    then Color3.fromRGB(40, 25, 0)
-                    else C.textMuted
-            end),
-            [Children] = {
-                s:New("UICorner")({ CornerRadius = UDim.new(0, 8) }),
-                s:New("UIStroke")({
-                    Color = s:Computed(function(use)
-                        return use(canAfford) and Color3.fromRGB(255, 240, 150) or C.btnBorder
-                    end),
-                    Thickness = 2,
-                    Transparency = 0.2,
-                }),
-            },
-            [OnEvent("MouseEnter")] = function() hovered:set(true) end,
-            [OnEvent("MouseLeave")] = function() hovered:set(false) end,
-            [OnEvent("Activated")] = function()
-                doHatch(state, count, isBusy)
-            end,
-        })
-    end
+local function gemHatchButton(
+	s: ScopeFactory.HudScope,
+	state: HudStateModule.HudState,
+	count: number,
+	cost: number,
+	layoutOrder: number,
+	isBusy: any
+)
+	local hovering = s:Value(false)
+	local canAfford = s:Computed(function(use)
+		return (use(state.gems) or 0) >= cost and not use(isBusy)
+	end)
+	return s:New("TextButton")({
+		Name = "GemHatch_" .. count,
+		Size = UDim2.new(0.5, -sc(5), 1, 0),
+		LayoutOrder = layoutOrder,
+		AutoButtonColor = false,
+		BackgroundColor3 = s:Computed(function(use)
+			if not use(canAfford) then
+				return C.btnDisabled
+			end
+			return if use(hovering) then C.bg3 else C.btnBg
+		end),
+		BorderSizePixel = 0,
+		Text = "",
+		ZIndex = 2,
+		[OnEvent("MouseEnter")] = function()
+			hovering:set(true)
+		end,
+		[OnEvent("MouseLeave")] = function()
+			hovering:set(false)
+		end,
+		[OnEvent("Activated")] = function()
+			if peek(canAfford) then
+				hatchDesertWithGems(count, isBusy)
+			else
+				SoundManager.play("buy_fail")
+			end
+		end,
+		[Children] = {
+			s:New("UICorner")({ CornerRadius = UDim.new(0, sc(8)) }),
+			s:New("UIStroke")({ Color = C.gem, Thickness = sc(1.25), Transparency = 0.35 }),
+			s:New("TextLabel")({
+				Size = UDim2.new(1, -sc(10), 0, sc(16)),
+				Position = UDim2.new(0, sc(5), 0, sc(6)),
+				BackgroundTransparency = 1,
+				Text = ("Открыть %d×"):format(count),
+				TextSize = text(13),
+				Font = Enum.Font.GothamBlack,
+				TextColor3 = s:Computed(function(use)
+					return if use(canAfford) then C.textMain else C.textMuted
+				end),
+				ZIndex = 3,
+			}),
+			s:New("TextLabel")({
+				Size = UDim2.new(1, -sc(10), 0, sc(16)),
+				Position = UDim2.new(0, sc(5), 0, sc(24)),
+				BackgroundTransparency = 1,
+				Text = ("%s 💎"):format(Formatters.shortNumber(cost)),
+				TextSize = text(13),
+				Font = Enum.Font.GothamBold,
+				TextColor3 = s:Computed(function(use)
+					return if use(canAfford) then C.gem else C.textMuted
+				end),
+				ZIndex = 3,
+			}),
+		},
+	})
+end
 
-    return s:New("Frame")({
-        Name = "HatchSection",
-        Size = UDim2.new(1, -8, 0, 92),
-        BackgroundColor3 = C.btnBg,
-        BorderSizePixel = 0,
-        LayoutOrder = 2,
-        [Children] = {
-            s:New("UICorner")({ CornerRadius = UDim.new(0, 8) }),
-            s:New("UIStroke")({ Color = C.gold, Thickness = 1.5, Transparency = 0.4 }),
-            -- Заголовок яйца.
-            s:New("TextLabel")({
-                Size = UDim2.new(1, -16, 0, 24),
-                Position = UDim2.new(0, 12, 0, 8),
-                BackgroundTransparency = 1,
-                Text = ("%s %s — %s 💰 за яйцо"):format(EGG.icon or "🥚", EGG.name or "Basic Egg", Formatters.shortNumber(EGG.cost or 0)),
-                TextSize = 14,
-                Font = Enum.Font.GothamBold,
-                TextColor3 = C.textMain,
-                TextXAlignment = Enum.TextXAlignment.Left,
-                ZIndex = 2,
-            }),
-            -- Контейнер кнопок.
-            s:New("Frame")({
-                Size = UDim2.new(1, -24, 0, 44),
-                Position = UDim2.new(0, 12, 0, 38),
-                BackgroundTransparency = 1,
-                [Children] = {
-                    s:New("UIListLayout")({
-                        FillDirection = Enum.FillDirection.Horizontal,
-                        Padding = UDim.new(0, 12),
-                        SortOrder = Enum.SortOrder.LayoutOrder,
-                    }),
-                    hatchButton("Открыть 1×", 1, 1),
-                    hatchButton("Открыть " .. HATCH_MAX .. "×", HATCH_MAX, 2),
-                },
-            }),
-        },
-    })
+local function desertEggSection(s: ScopeFactory.HudScope, state: HudStateModule.HudState, isBusy: any): Instance?
+	local egg = desertEggDef()
+	local gemCost = egg and tonumber(egg.gemCost) or 0
+	if not egg or gemCost <= 0 then
+		return nil
+	end
+	local maxN = math.max(1, math.floor((Constants.PETS or {}).hatchBatchMax or 10))
+	return s:New("Frame")({
+		Name = "DesertEggShop",
+		Size = UDim2.new(1, -sc(8), 0, sc(132)),
+		BackgroundColor3 = C.btnBg,
+		BorderSizePixel = 0,
+		LayoutOrder = 3,
+		[Children] = {
+			s:New("UICorner")({ CornerRadius = UDim.new(0, sc(8)) }),
+			s:New("UIStroke")({ Color = C.gem, Thickness = sc(1.5), Transparency = 0.4 }),
+			s:New("UIPadding")({
+				PaddingTop = PanelScale.pad(10),
+				PaddingLeft = PanelScale.pad(12),
+				PaddingRight = PanelScale.pad(12),
+				PaddingBottom = PanelScale.pad(10),
+			}),
+			s:New("UIListLayout")({
+				FillDirection = Enum.FillDirection.Vertical,
+				Padding = PanelScale.pad(6),
+				SortOrder = Enum.SortOrder.LayoutOrder,
+			}),
+			s:New("TextLabel")({
+				Size = UDim2.new(1, 0, 0, sc(18)),
+				LayoutOrder = 1,
+				BackgroundTransparency = 1,
+				Text = (egg.name or "Desert Egg") .. " — за кристаллы",
+				TextSize = text(13),
+				Font = Enum.Font.GothamBold,
+				TextColor3 = C.textLabel,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				ZIndex = 2,
+			}),
+			s:New("TextLabel")({
+				Size = UDim2.new(1, 0, 0, sc(16)),
+				LayoutOrder = 2,
+				BackgroundTransparency = 1,
+				Text = s:Computed(function(use)
+					return ("Лучше шансы на редких. У тебя: %s 💎"):format(Formatters.shortNumber(use(state.gems) or 0))
+				end),
+				TextSize = text(12),
+				Font = theme.FONT.body,
+				TextColor3 = C.textSub,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				ZIndex = 2,
+			}),
+			s:New("Frame")({
+				Name = "Buttons",
+				Size = UDim2.new(1, 0, 0, sc(48)),
+				LayoutOrder = 3,
+				BackgroundTransparency = 1,
+				[Children] = {
+					s:New("UIListLayout")({
+						FillDirection = Enum.FillDirection.Horizontal,
+						Padding = UDim.new(0, sc(10)),
+						SortOrder = Enum.SortOrder.LayoutOrder,
+						VerticalAlignment = Enum.VerticalAlignment.Center,
+					}),
+					gemHatchButton(s, state, 1, gemCost, 1, isBusy),
+					gemHatchButton(s, state, maxN, gemCost * maxN, 2, isBusy),
+				},
+			}),
+		},
+	})
 end
 
 function PetsPanel.create(s: ScopeFactory.HudScope, state: HudStateModule.HudState)
-    local isBusy = s:Value(false)
-
-    return s:New("ScrollingFrame")({
-        Name = "Pets",
-        Size = UDim2.new(1, 0, 1, 0),
-        BackgroundTransparency = 1,
-        BorderSizePixel = 0,
-        ScrollBarThickness = 5,
-        ScrollBarImageColor3 = C.panelBorder,
-        CanvasSize = UDim2.new(0, 0, 0, 0),
-        AutomaticCanvasSize = Enum.AutomaticSize.Y,
-        Visible = s:Computed(function(use)
-            return use(state.activeTab) == "pets"
-        end),
-        [Children] = {
-            s:New("UIPadding")({
-                PaddingTop = UDim.new(0, 4),
-                PaddingLeft = UDim.new(0, 4),
-                PaddingRight = UDim.new(0, 4),
-                PaddingBottom = UDim.new(0, 8),
-            }),
-            s:New("UIListLayout")({
-                FillDirection = Enum.FillDirection.Vertical,
-                Padding = UDim.new(0, 10),
-                SortOrder = Enum.SortOrder.LayoutOrder,
-            }),
-            boostHeader(s, state),
-            hatchSection(s, state, isBusy),
-            -- Заголовок «Мои питомцы: N».
-            s:New("TextLabel")({
-                Name = "PetsCountLabel",
-                Size = UDim2.new(1, -8, 0, 20),
-                LayoutOrder = 3,
-                BackgroundTransparency = 1,
-                Text = s:Computed(function(use)
-                    local pets = use(state.pets) or {}
-                    local eq = #(use(state.equippedUids) or {})
-                    local maxN = use(state.petMaxEquipped) or 1
-                    return ("Мои питомцы: %d  ·  слотов %d/%d"):format(#pets, eq, maxN)
-                end),
-                TextSize = 13,
-                Font = Enum.Font.GothamBold,
-                TextColor3 = C.textLabel,
-                TextXAlignment = Enum.TextXAlignment.Left,
-                ZIndex = 2,
-            }),
-            -- Грид петов. Computed ВНУТРИ [Children] (Phase 10 grab #2).
-            s:New("Frame")({
-                Name = "PetsGrid",
-                Size = UDim2.new(1, -8, 0, 0),
-                AutomaticSize = Enum.AutomaticSize.Y,
-                BackgroundTransparency = 1,
-                LayoutOrder = 4,
-                [Children] = {
-                    s:New("UIGridLayout")({
-                        CellSize = UDim2.new(0, 92, 0, 108),
-                        CellPadding = UDim2.new(0, 8, 0, 8),
-                        SortOrder = Enum.SortOrder.LayoutOrder,
-                    }),
-                    s:Computed(function(use)
-                        local cards = {}
-                        local pets = use(state.pets) or {}
-                        local equippedUids = use(state.equippedUids) or {}
-                        for i, rec in ipairs(pets) do
-                            cards[#cards + 1] = PetCard.create(s, {
-                                uid = rec.uid,
-                                petId = rec.petId,
-                                equipped = isEquippedUid(rec.uid, equippedUids),
-                                layoutOrder = i,
-                                onToggle = onTogglePet,
-                            })
-                        end
-                        return cards
-                    end),
-                },
-            }),
-            -- Empty-state.
-            s:New("TextLabel")({
-                Name = "EmptyState",
-                Size = UDim2.new(1, -8, 0, 40),
-                LayoutOrder = 5,
-                BackgroundTransparency = 1,
-                Text = "🥚 Открой яйцо, чтобы получить первого питомца!",
-                TextSize = 13,
-                Font = Enum.Font.GothamBold,
-                TextColor3 = C.textMuted,
-                TextWrapped = true,
-                Visible = s:Computed(function(use)
-                    return #(use(state.pets) or {}) == 0
-                end),
-                ZIndex = 2,
-            }),
-        },
-    })
+	local isBusy = s:Value(false)
+	return s:New("ScrollingFrame")({
+		Name = "Pets",
+		Size = UDim2.new(1, 0, 1, 0),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = PanelScale.scrollBar(),
+		ScrollBarImageColor3 = C.panelBorder,
+		CanvasSize = UDim2.new(0, 0, 0, 0),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		Visible = s:Computed(function(use)
+			return use(state.activeTab) == "pets"
+		end),
+		[Children] = {
+			s:New("UIPadding")({
+				PaddingTop = PanelScale.pad(4),
+				PaddingLeft = PanelScale.pad(4),
+				PaddingRight = PanelScale.pad(4),
+				PaddingBottom = PanelScale.pad(8),
+			}),
+			s:New("UIListLayout")({
+				FillDirection = Enum.FillDirection.Vertical,
+				Padding = PanelScale.pad(10),
+				SortOrder = Enum.SortOrder.LayoutOrder,
+			}),
+			boostHeader(s, state),
+			s:New("TextLabel")({
+				Name = "EquipHint",
+				Size = UDim2.new(1, -sc(8), 0, sc(36)),
+				LayoutOrder = 2,
+				BackgroundColor3 = C.bg3,
+				BackgroundTransparency = 0.2,
+				Text = "  Нажми на питомца, чтобы надеть или снять. Базовые яйца — у машин, Desert Egg — за кристаллы ниже.",
+				TextSize = text(12),
+				Font = theme.FONT.body,
+				TextColor3 = C.textSub,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				TextWrapped = true,
+				ZIndex = 2,
+				[Children] = {
+					s:New("UICorner")({ CornerRadius = UDim.new(0, sc(8)) }),
+				},
+			}),
+			desertEggSection(s, state, isBusy),
+			s:New("TextLabel")({
+				Name = "PetsCountLabel",
+				Size = UDim2.new(1, -sc(8), 0, sc(20)),
+				LayoutOrder = 4,
+				BackgroundTransparency = 1,
+				Text = s:Computed(function(use)
+					local pets = use(state.pets) or {}
+					local eq = #(use(state.equippedUids) or {})
+					local maxN = use(state.petMaxEquipped) or 1
+					return ("Мои питомцы: %d  ·  слотов %d/%d"):format(#pets, eq, maxN)
+				end),
+				TextSize = text(13),
+				Font = Enum.Font.GothamBold,
+				TextColor3 = C.textLabel,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				ZIndex = 2,
+			}),
+			s:New("Frame")({
+				Name = "PetsList",
+				Size = UDim2.new(1, -sc(8), 0, 0),
+				AutomaticSize = Enum.AutomaticSize.Y,
+				BackgroundColor3 = C.panelInner,
+				BackgroundTransparency = 0.4,
+				BorderSizePixel = 0,
+				LayoutOrder = 5,
+				[Children] = {
+					s:New("UICorner")({ CornerRadius = UDim.new(0, sc(10)) }),
+					s:New("UIStroke")({
+						Color = C.dockBorder,
+						Thickness = sc(1),
+						Transparency = 0.45,
+					}),
+					s:New("UIPadding")({
+						PaddingTop = PanelScale.pad(6),
+						PaddingBottom = PanelScale.pad(6),
+						PaddingLeft = PanelScale.pad(6),
+						PaddingRight = PanelScale.pad(6),
+					}),
+					s:New("UIGridLayout")({
+						CellSize = PetCard.cellSize(),
+						CellPadding = UDim2.fromOffset(sc(8), sc(8)),
+						SortOrder = Enum.SortOrder.LayoutOrder,
+						HorizontalAlignment = Enum.HorizontalAlignment.Left,
+					}),
+					s:Computed(function(use)
+						local pets = use(state.pets) or {}
+						local cards = {}
+						for i, rec in ipairs(pets) do
+							cards[#cards + 1] = PetCard.create(s, {
+								uid = rec.uid,
+								petId = rec.petId,
+								equippedUids = state.equippedUids,
+								layoutOrder = i,
+								onToggle = onTogglePet,
+							})
+						end
+						return cards
+					end),
+				},
+			}),
+			s:New("TextLabel")({
+				Name = "EmptyState",
+				Size = UDim2.new(1, -sc(8), 0, sc(48)),
+				LayoutOrder = 6,
+				BackgroundTransparency = 1,
+				Text = "Пока нет питомцев. Подойди к яйцу на базе и открой его!",
+				TextSize = text(13),
+				Font = Enum.Font.GothamBold,
+				TextColor3 = C.textMuted,
+				TextWrapped = true,
+				Visible = s:Computed(function(use)
+					return #(use(state.pets) or {}) == 0
+				end),
+				ZIndex = 2,
+			}),
+		},
+	})
 end
 
 return PetsPanel

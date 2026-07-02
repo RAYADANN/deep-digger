@@ -5,9 +5,40 @@
 > **Архитектура:** 3D Neighbor Reveal (текущая). К вертикальной сетке 6×N не возвращаемся.
 > **Кто пишет код:** AI-агент в Cursor.
 > **Кто тестирует:** разработчик (Roblox Studio + Rojo).
-> **Статус:** Фазы 0–14 + 16 закрыты 🟢 (Фаза 5 ждёт плейтест-профайл; 12–14 + 16 ждут коммита; Фаза 14 — код готов, финальные PNG-ассеты грузит разработчик). Фаза 15 (soft launch) — 🔴.
-> **Обновлено:** 2026-06-03
-> **Scope-добавление (Фаза 16):** по запросу до soft-launch добавлены взвешенное распределение руды (Minecraft-style), цели/квесты + подключены достижения и фонарик игрока — игре нужна была понятная цель и видимость в шахте.
+> **Статус:** Фазы 0–14 + 16 + **17** закоммичены 🟢. Помимо MVP реализованы и закоммичены **пост-MVP системы вне исходного scope**: промокоды, соц-награда, egg shop с 6 типами яиц, баффы, мутации руды, повторяемые ежедневки, hub-зоны, world-leaderboard, mine-deck collision, responsive-layout HUD. Фаза 5 — ждёт плейтест-профайл. Фаза 14 — финальные PNG в Creator Hub грузит разработчик. **Фаза 15 (soft launch) — 🔴** (блокеры: реальные id монетизации, непройденный плейтест Фазы 5).
+> **Обновлено:** 2026-07-02
+> **⚠️ Честно про scope:** пост-MVP системы (см. выше) добавлены **после** закрытия MVP-скоупа и **до** первого плейтеста/soft-launch — это нарушение правила против scope creep в конце документа. Игра написана на ~35k строк без единого живого игрока. Правильнее было бы выпустить ядро через unlisted soft launch и раздать эти системы апдейтами 1.1/1.2.
+> **Scope-добавление (Фаза 16):** взвешенное распределение руды (Minecraft-style), цели/квесты + подключены достижения и освещение шахты (свет на курсоре).
+>
+> **Правило документа:** цифры контента, навигация HUD и поведение механик сверяются с **кодом** (`src/`), а не с устаревшими записями в STATUS. При расхождении — правда в коде.
+
+---
+
+## Снимок актуального состояния (код, 2026-07-02)
+
+| Область | Факт в коде | Было в старых версиях MVP |
+|---------|-------------|---------------------------|
+| **Руды** | **55** записей в `OreDatabase` (**54** discoverable в журнале + `test_glow` weight=0) | «31 руда» |
+| **Слои** | 7 (dirt → void), milestone 2.5k → 25M coins | Совпадает |
+| **Питомцы** | **30** playable (`PetDatabaseEntries.lua`), 3D-модели через `PetModelKit` | «10 петов» |
+| **Яйца** | **6** типов в `EggPoolDatabase` (`basic`, `desert`, `candy`, `ocean`, `lava`, `explosive_hydro`), по 6 взвешенных петов; egg shop + Robux-прайсинг (`EggMonetization`) | Раньше: «1 рабочее, остальные ждут» — **добавлено вне MVP** |
+| **Апгрейды** | 7 | Совпадает |
+| **Квесты** | 10 sequential (`QuestLogic.lua`) + **3 повторяемых ежедневки** (`DailyQuestLogic`) | Раньше: только 10 |
+| **Достижения** | 7 (`AchievementManager.lua`, server-only); `boss_slayer` hidden | Совпадает |
+| **Промокоды** | **2** (`PromoCodes.lua` + `PromoCodeManager` + `RedeemCode`) — **вне MVP** | Не было |
+| **Соц-награда** | join группы + favorite → награда (`SocialRewardManager`) — **вне MVP** | Не было |
+| **Баффы** | 5 видов (`BuffMeta`: damage/luck/coin/multiMine/speed), `BuffBar` — **вне MVP** | Не было |
+| **Мутации руды** | `MutationLogic` + `Constants.MUTATIONS` (шанс + вариант + бонус монет) — **вне MVP** | Не было |
+| **HUD layout** | `CurrencyRibbon` + `InventoryWidget` + `LeftSidebar` dock + modal `MainPanel`; **responsive** (`ViewportLayout`: phone/tablet/desktop) | Старый `TabBar`/`TopBar` deprecated |
+| **Навигация** | Dock: inventory / upgrades / goals / journal / more + sell; **More → pets, stats, rebirth, leaderboard, shop**; hub-зоны SELL/UPGRADE + world-leaderboard на поверхности | Ранее «pets без кнопки» — исправлено |
+| **Освещение шахты** | `Constants.HEADLAMP.enabled = false`; активен **`CURSOR_LIGHT`** в `MiningRenderer` | «Фонарик на персонаже» |
+| **Визуал руд** | Low-poly: `color` + `protrusion="crystal"`, `OreShellMeshes`, `OreFXPalette`, `OreBlockDecor`; **material/reflectance/glow сняты** | Фаза 14: материалы Slate/Foil/Glass |
+| **Иконки руд** | 54 baked `OreIconPixels/*.lua` + PNG в `assets/ui/ores/` | Не описано |
+| **Монетизация** | 3 gamepass + 3 devproduct + egg-devproducts (авто-инжект), все **`id = 0`** (блокер покупок) | Совпадает |
+| **Гемы** | Начисляются (квесты/ачивки/промокоды), **нет UI и трат** | Совпадает (скрыты) |
+| **Античит** | CPS/batch/swing для копания; глубина — **server-clamp** к позиции персонажа (`serverDepthFor` + slack), reach-хелпер `MiningReach` есть (проверить wiring в `MineBlock`) | Раньше: «глубина client-trusted» |
+| **Тесты / CI** | **0 тестов, нет CI**; `selene`/`stylua` в `rokit.toml`, но без конфигов и не форсятся | Не описано — **долг качества** |
+| **Объём** | **~35k строк / 230 .lua** в `src/` (client 109 / shared 96 / server 25); `MiningRenderer` ~1.8k строк | «~19k / ~176» (устарело) |
 
 ---
 
@@ -22,10 +53,12 @@
 - Limited-time events (работают только когда есть аудитория).
 - NPC в шахте, сейсмические события, биом-вариации (атмосферные фичи на потом).
 - Mine Shafts как отдельная механика — используем уже реализованные **скрытые комнаты**.
-- Полировка слоёв глубже Stone — Limestone+ остаются в `OreDatabase` для прогрессии после ребёрта, но без отдельного полишинга UI/звуков.
+- Полировка **игрового ощущения** слоёв глубже Stone — в коде уже есть `LayerProfile` + `LayerAmbience` + звуки для **всех 7 слоёв**, но QA/баланс и «feel pass» ориентированы на Dirt + Stone (limestone+ без отдельного плейтест-чеклиста).
 - Нефть, ауры, крафт, расходники (молоток, бомба).
 
 Всё это — **post-MVP** контент.
+
+> ⚠️ **Что фактически построено вопреки этому разделу (до soft-launch):** промокоды, соц-награда, egg shop с 6 типами яиц, баффы, мутации руды, повторяемые ежедневки, hub-зоны, world-leaderboard, responsive-layout. Это ретроспективный урок: перечисленное следовало держать в патчах 1.1/1.2 и выпустить ядро раньше. Раздел оставлен как есть — расхождение между планом и фактом само по себе документирует scope creep.
 
 ---
 
@@ -40,13 +73,13 @@
 5. Сделать **ребёрт** хотя бы раз и почувствовать множитель.
 6. Открыть яйцо, получить **питомца**, экипировать, увидеть бонус к damage/luck.
 7. Зайти на следующий день, забрать **daily reward**, увидеть себя в **лидерборде**.
-8. Купить **gamepass** или **coin pack** через Roblox (минимум 3 пасса + 2 девпродукта).
+8. Купить **gamepass** или **coin pack** через Roblox (3 gamepass + 3 devproduct — логика готова, **реальные id в Creator Hub ещё 0**).
 9. Выйти и вернуться — прогресс тот же (ProfileService), питомцы и ребёрты сохранены.
-10. **Открыть журнал находок** (8-й таб 📖): видеть «???» до первой добычи, после удара — имя/иконка руды; при полном слое — milestone-монеты и тост.
+10. **Открыть журнал находок** (таб 📖 в dock): видеть «???» до первой добычи, после удара — имя/иконка руды (pixel/PNG); при полном слое — milestone-монеты и тост. Каталог: **54 руды**.
 11. Играть 30+ минут подряд с **ощутимым «соком»** ударов (звуки, screen shake, particles) без утечек FPS.
 12. Получить **3 туториал-подсказки** в первые 30 секунд (клик → продай → купи кирку).
-13. **Видеть цель** (9-й таб 🎯 ЦЕЛИ): активный квест с прогрессом, забрать награду, разблокировать достижения — есть ради чего копать.
-14. Видеть в шахте вокруг себя (фонарик), при этом глубина остаётся атмосферно-тёмной.
+13. **Видеть цель** (таб 🎯 ЦЕЛИ в dock): активный квест с прогрессом, забрать награду, разблокировать достижения — есть ради чего копать. Цепочка: **10 квестов**.
+14. Видеть блок под курсором (**свет на курсоре**, `CURSOR_LIGHT` в `MiningRenderer`); атмосфера глубины — тёмная (`LayerEnvironment` + fog). Модуль `Headlamp` есть, но **`HEADLAMP.enabled = false`**.
 
 **Retention-принцип (не Pet Simulator):** цель охоты — **руда и слои глубины**, петы — инструмент. Без **Ore Discovery Index** нет долгосрочной мотивации «найти всё» → удержание падает.
 
@@ -56,8 +89,9 @@
 
 - **Все 7 апгрейдов** из `Constants.UPGRADES`: pickaxe, speed, fortune, inventory, crit, multiSell, autoSell.
 - **Штраф x0.5** урона по Stone при `pickaxeLevel < 5`.
-- **Гемы** в HUD скрыты до post-MVP (поле остаётся в профиле, но UI и покупки за гемы — позже).
-- **Скрытые комнаты** уже в коде — доводим, отдельные shafts не добавляем.
+- **Гемы** в HUD скрыты до post-MVP (поле `playerData.gems` копится с квестов/ачивок, UI и sink'и — позже).
+- **Скрытые комнаты** уже в коде (`SHAFT_*` в Constants) — отдельные Mine Shafts не добавляем.
+- **Мёртвые поля данных** (не трогаем до post-MVP): `OreDef.xp` (нигде не читается), `oil_deposit` (`value=0`, `dropsOil=true`), `playTime` (не инкрементируется), `shaftsFound[]` (используется `shaftRoomCount`).
 
 ---
 
@@ -82,11 +116,12 @@
 | 5 | 6 → 7 | ✅ Единый источник руд (Фаза 6); ✅ **game feel pass** — звуки, screen shake, juicy dmg numbers, rarity-ramp break, slow-mo crit, mobile haptics |
 | 6 | 8 → 9 | ✅ Туториал + Error UX + tooltip + count-up (Фаза 8); ✅ **Rebirth/Prestige** loop (Фаза 9) |
 | 7 | 10 | ✅ **Daily reward** (7-day cycle, streak, x2 boost'ы) + **глобальный leaderboard** (MemoryStoreSortedMap, top-50 coins/depth, avatar thumbnails) |
-| 8–9 | 11 | **Pets MVP**: 5–10 питомцев, egg-система, equip slot, эффекты |
-| 10 | 12 | ✅ Монетизация: 3–4 game-passes, 2–3 DevProducts (coin packs) |
-| 11 | **13** | **Ore Discovery Index**: 8-й таб 📖 ЖУРНАЛ, 30 руд, milestone за полный слой, переживает ребёрт |
-| 12 | 14 | Визуальный пасс: материалы по слоям, key art, иконка, thumbnail |
-| 12 | **16** | ✅ Распределение руды (взвешенный спавн) + Цели (квесты, достижения) + фонарик |
+| 8–9 | 11 | ✅ **Pets MVP**: **30 питомцев** (3D `PetModelKit`), 1 egg type, multi-slot equip, hatch FX |
+| 10 | 12 | ✅ Монетизация: 3 game-passes, 3 DevProducts (coin packs + egg10) |
+| 11 | **13** | ✅ **Ore Discovery Index**: таб 📖 ЖУРНАЛ, **54 discoverable руды**, milestone за полный слой |
+| 12 | 14 | ✅ Визуальный пасс: low-poly идентичность руд, lighting по слоям, Creator Hub бриф (PNG — вне кода) |
+| 12 | **16** | ✅ Распределение руды (взвешенный спавн) + Цели (квесты, достижения) + свет на курсоре |
+| 13 | **17** | **UI/UX overhaul**: dock-HUD, кастомные иконки, LayerAmbience, ore-shell meshes |
 | 13–14 | 15 | Soft launch: 2-player playtest, balance fixes, релиз unlisted → public |
 
 ---
@@ -104,8 +139,17 @@
 - **`client/ui/Notification.lua`** — переиспользуемая всплывашка (`Notification.show({ text, color, icon, duration })`).
 - **`Net:Connect("Notify")`** — серверный `notify(player, payload)` уже подключён в `init.server.lua`.
 - **HUD модуляризован**: `client/ui/HUD.lua` — фасад, всё остальное в `client/ui/hud/{components,panels,*.lua}`.
+- **`shared/data/UiAssets.lua`** + `assets/ui/*.png` (Rojo → `ReplicatedStorage.uiAssets`) — единый реестр иконок HUD/апгрейдов; rbxassetid в проде, локальные PNG для итерации.
+- **`shared/data/OreAssets.lua`** + `OreIconPixelLoader` + `OreIconPixels/*.lua` (54 модуля) — baked 64×64 иконки руд; пайплайн `tools/bake_ore_icons.py`.
+- **`shared/data/LayerProfile.lua`** — идентичность слоёв (ambient, туман, пыль, block-glow); читают `LayerAmbience` и `MiningRenderer`.
+- **`shared/util/PetModelKit.lua`** — монтирование 3D-моделей петов (viewport + followers).
+- **`client/core/EggMachines.lua`** — ProximityPrompt на `Workspace.Eggs` (только `basic` реально открывает hatch).
+- **`client/ui/HomeFX.lua`** + `Net:Invoke("GoHome")` — iris-wipe телепорт на spawn.
+- **`server/core/PlayerTag.lua`** — BillboardGui над головой: rebirth tier + VIP override.
+- **`client/ui/util/{UiInteract,UiMotion}.lua`** — hover/press для dock-кнопок (desktop hover, mobile press-only).
+- **`shared/util/{OreFXPalette,OreShellMeshes}.lua`** — палитра VFX руды и mesh-накладки rare/epic+ на блоки.
 
-Балансные числа жить только в `shared/constants.lua` (Constants.UPGRADES, Constants.LAYERS, и т.п.).
+Балансные числа жить только в `shared/constants.lua` (Constants.UPGRADES, Constants.LAYERS, и т.п.). Профили слоёв для атмосферы — в `LayerProfile.lua`.
 
 ---
 
@@ -202,7 +246,7 @@
 - [x] Клиент (`MiningRenderer`, `HUD/InvSlot`, `HUD/HudState`) берёт цвет / редкость / иконку через `client/core/OreLookup` — единый O(1) лукап по `oreId`.
 - [x] Удалены дубли: `ORE_C` / `ORE_R` / `RAR_C` из `MiningRenderer`, файл `client/ui/hud/OreCatalog.lua` целиком.
 - [x] Emoji-иконки переехали в `OreDatabase` (поле `icon`, было `""`).
-- [x] `OreDef` расширен опциональными полями `material` / `reflectance` / `atlasIndex` / `meshId` / `glow` — задел под Фазу 13 (Blender + Substance Painter texture atlas), без изменений в рендере.
+- [x] `OreDef` расширен полями `weight` (Фаза 16), `protrusion` (Фаза 17), опциональными `dropsOil` / `isGeode`. Поля `material`/`reflectance`/`glow` в типе остались, но **в данных не заполняются** (low-poly pass).
 - [x] Добавление новой руды = правка только `OreDatabase` + перезапуск сервера.
 
 **Тест:** добавлена `test_glow` (mythic, dirt, фиолетовая, 🟪) — появляется на поверхности, красный rarity-tag, mythic-частицы, в инвентаре отображается с правильной иконкой и цветом полоски — без единой правки клиентского кода.
@@ -234,7 +278,7 @@
 - [x] **3 подсказки** (`client/ui/Tutorial.lua` orchestrator + `tutorial/TutorialFlow.lua` data-driven сцены): 1) «Кликни блок» (стрелка на ближайший block-part), 2) «Открой инвентарь» → «Продай руду» (стрелка на Tab_inventory, потом SellButton), 3) «Купи кирку» (Tab_upgrades → UpgRow_pickaxe). Прогресс — `playerData.tutorialStep` (0..3), сервер валидирует монотонный рост в `TutorialManager.lua`.
 - [x] **Стрелки/highlights** (`client/ui/TutorialArrow.lua`): пульсирующий золотой UIStroke поверх GuiObject и BillboardGui-стрелка ⬇ с bounce-tween над BasePart. Стрелка следит за target через RenderStepped, не блокирует ввод (`Active = false`).
 - [x] **Диалоговые окна** (`client/ui/tutorial/TutorialDialog.lua`): боттом-центр диалог наставника «Шахтёр Бородач ⛏️» с typewriter-эффектом (~42 char/sec, UTF-8 safe), кнопкой [Понятно ✓] и [✕] skip. Цвет stroke зависит от kind (intro=gold, task=cyan, success=green, finale=mythic). Slide-in/out, клик по диалогу мгновенно дописывает текст. `Active=false` снаружи — геймплей не блокируется.
-- [x] **Мини-задания** (`client/ui/tutorial/TutorialTracker.lua`): квест-трекер справа под TopBar с заголовком «Задание N из 3», описанием и опциональным progress bar. На выполнение — заполнение до конца, цвет → зелёный, анимированный ✓ (Back/Out 0.3с), auto-hide через 1.4с.
+- [x] **Мини-задания** (`client/ui/tutorial/TutorialTracker.lua`): квест-трекер справа с заголовком «Задание N из 3», описанием и опциональным progress bar. На выполнение — заполнение до конца, цвет → зелёный, анимированный ✓ (Back/Out 0.3с), auto-hide через 1.4с.
 - [x] **Data-driven flow** (`client/ui/tutorial/TutorialFlow.lua`): все 9 сцен (`welcome → step_0_task → step_0_success → step_1_open_inventory → step_1_sell → step_1_success → step_2_open_upgrades → step_2_buy_pickaxe → finale`) описаны декларативно — `speaker / text / kind / task / target / arrowText / completeOn`. Тексты диалогов переписываются без правок логики. `SERVER_STEP_AFTER` маппит scene → серверный шаг (`UpdateTutorialStep` шлётся только на success/finale).
 - [x] **Sound feedback**: `ui_click` на advance диалога, `sell_success` на завершение задачи и финал.
 - [x] **Skip Tutorial**: кнопка [✕] в диалоге → `Tutorial.skip()` → `UpdateTutorialStep(3)`. DevCommand `/skiptut` ставит `tutorialStep=3` для тестирования не-онбординг-фич.
@@ -254,9 +298,9 @@
 **Цель:** долгосрочная петля. После первого ребёрта игрок видит «куда расти».
 
 - [x] **`server/core/RebirthManager.lua`**: DI (`profileManager`, `onProfileChanged`, `notify`, `onResetBlocks`), `Net:Handle("Rebirth")` с серверной валидацией `coins >= RebirthLogic.cost(rebirths)`, `_applyRebirth` сбрасывает прогресс, инкрементирует `rebirths`, денормализует `rebirthMultiplier`, шлёт тост `kind="rebirth"` для клиентского FX, `onProfileLoaded` идемпотентно пересчитывает кэш, `devRebirth(player, n)` — для DevCommands.
-- [x] **Что сохраняется при ребёрте**: `rebirths`, `rebirthMultiplier`, `totalCoinsEarned`, `totalBlocksMined`, `maxDepthReached`, `bossesDefeated`, `shaftsFound`, `playTime`, `tutorialStep`, `firstSession`. **Сбрасывается**: `coins=0`, `inventory={}`, все `*Level=1`, `autoSellUnlocked=false`, `depth/layer/_stoneLayerNotified`.
+- [x] **Что сохраняется при ребёрте**: `rebirths`, `rebirthMultiplier`, `totalCoinsEarned`, `totalBlocksMined`, `maxDepthReached`, `bossesDefeated`, `playTime`, `tutorialStep`, `firstSession`, **`pets` / `equippedPet`**, **`discoveredOres` / `discoveredMilestones`**, `claimedQuests`, `unlockedAchievements`, `gamepasses`, `dailyState`, `activeBoosts`. **Сбрасывается**: `coins=0`, `inventory={}`, все `*Level=1`, `autoSellUnlocked=false`, `depth/layer/_stoneLayerNotified`.
 - [x] **Что усиливается**: множитель `1 + rebirths * 0.1` к value руд в `SellInventory.execute` (после `multiSellMultiplier`); `UpgradeLogic.maxLevel(upgradeId, rebirths)` даёт +1 к maxLevel pickaxe на каждом перейденном пороге `Constants.REBIRTH.pickaxeMaxBonusAt = {5, 10, 25}`.
-- [x] **UI**: 4-й таб REBIRTH в `TabBar` (`Tab_rebirth`), `RebirthPanel.lua` с заголовком «Ребёрты: N / Множитель: x1.X», крупной кнопкой REBIRTH (disabled при недостатке монет, текст «Не хватает X 💰»), описанием «Что сохранится / сбросится / следующий бонус кирки». Опциональный TopBar-чип `💠 N x1.X` появляется при `rebirths > 0`.
+- [x] **UI**: таб REBIRTH в modal `MainPanel` (доступ через dock → «Ещё» → rebirth), `RebirthPanel.lua` с заголовком «Ребёрты: N / Множитель: x1.X», крупной кнопкой REBIRTH (disabled при недостатке монет, текст «Не хватает X 💰»), описанием «Что сохранится / сбросится / следующий бонус кирки». Чип ребёрта в `CurrencyRibbon` при `rebirths > 0`.
 - [x] **`RebirthConfirmModal.lua`**: затемнение + центрированный фрейм, RichText body с разделением «✓ сохранится / ✗ сбросится / ⛏ следующий бонус», кнопка [РЕБЁРТ] disabled первые **0.3с** (anti-misclick), ESC / клик по backdrop / [ОТМЕНА] закрывают без действия. Modal `Active=true` — клик мимо кнопок не проваливается на backdrop.
 - [x] **`client/ui/RebirthFX.lua`**: mining-style локальный FX в позиции игрока — 3 золотых shockwave-кольца (volumes 22/32/40 студов, ForceField-сфера) + 30 золотых физических chunks с gravity. **Без camera-shake, slow-mo, fullscreen flash** — соблюдены Phase 7 mining-принципы.
 - [x] **Notification**: тост «REBIRTH! Ребёрт #N, теперь x1.X к ценам руд», icon=💠, duration=5с. `kind="rebirth"` в payload триггерит `RebirthFX.burst()` на клиенте.
@@ -282,14 +326,14 @@
 - [x] **`SellInventory.execute`**: `payout = floor(gross * multiSellMult * rebirthMult * boostMult)` — порядок: persistent → temporary. `PlayerBoosts.cleanup` чистит истёкшие перед расчётом.
 - [x] **UI daily** (`client/ui/DailyRewardModal.lua` + `hud/components/DailyCard.lua`): full-screen overlay `DisplayOrder=95`, сетка 7 карточек (4×2 desktop / 2×4 mobile при `viewport.X < 800`), rarity-цветной `UIStroke`, pulse-glow на текущем дне, ✓ на прошлых, затемнение на будущих. Anti-misclick **0.4с** перед `[ЗАБРАТЬ]`, ESC / `[ПОЗЖЕ]` закрывают. Каждое `show()` создаёт собственный `innerScope` + `Fusion.doCleanup` на закрытии — без накопления реактивов.
 - [x] **`client/ui/RewardFX.lua`**: full-screen coin/gem rain (60 спрайтов 💰 с physics + rotation, fade) + 3 rarity-цветных shockwave кольца в центре. ~1.5с total, `pcall`-обёртки. Триггерится через `Net:Connect("Notify")` с `payload.kind="daily_reward"` — server-authoritative по rarity (избегаем двойного burst'a).
-- [x] **TopBar чипы**: `BoostChip.lua` (visible при `#activeBoosts > 0`, локальный countdown «⚡ x2 · 29:42», RGB-cycle `UIStroke` через `RunService.Heartbeat`), `StreakChip.lua` (visible при `streak >= 2`, «🔥 N дней»). StatsPanel показывает streak + ранги лидерборда.
+- [x] **TopBar чипы** → **`CurrencyRibbon` чипы** (Фаза 17): `BoostChip.lua` (visible при `#activeBoosts > 0`, локальный countdown «⚡ x2 · 29:42», RGB-cycle `UIStroke` через `RunService.Heartbeat`), `StreakChip.lua` (visible при `streak >= 2`, «🔥 N дней»). StatsPanel показывает streak + ранги лидерборда.
 - [x] **Глобальный лидерборд** (`server/core/Leaderboard.lua` переписан): `MemoryStoreSortedMap` × 2 (`Leaderboard_Coins_v1`, `Leaderboard_Depth_v1`), ключ = `"user_<userId>"`, значение = integer score, `expirationSeconds = 30 days` TTL. `writeIfChanged` через `LeaderboardLogic.shouldWrite` (delta >= `writeThresholdCoins=100`/`writeThresholdDepth=5`). Дёргается из `onEconomyChanged` (после продажи) и `RebirthManager`. Имена игроков — `Players:GetNameFromUserIdAsync` + локальный `nameCache`. Refresh раз в 30с с retry exp-backoff `2/4/8с` на ошибки MemoryStore. `Net:Function("RequestLeaderboard")` с server-side throttle 5с на игрока.
-- [x] **UI лидерборда** (`client/ui/hud/panels/LeaderboardPanel.lua` + `hud/components/LeaderRow.lua`): 5-й таб 🏆 в `TabBar` (ширина 5*58+4*6=320), toggle «💰 Монеты / ⬇ Глубина», spotlight-карточка топ-1 с короной 👑 + золотой gradient + pulse-glow, ScrollingFrame top-2..top-50, footer «Вы: #N» если игрок вне топ-50, countdown «Обновится через Ns» справа сверху. **Avatar thumbnails**: `Players:GetUserThumbnailAsync(userId, HeadShot, Size150x150)` async, кэш в module-level `{ [userId] = imageId }`, skeleton-placeholder до загрузки, fade-in при готовности. Loading skeleton (10 строк) до первого fetch'a, «Сервис недоступен, обновляем...» при ошибке.
+- [x] **UI лидерборда** (`client/ui/hud/panels/LeaderboardPanel.lua` + `hud/components/LeaderRow.lua`): таб 🏆 в `MainPanel` (dock → «Ещё» → leaderboard), toggle «💰 Монеты / ⬇ Глубина», spotlight-карточка топ-1 с короной 👑 + золотой gradient + pulse-glow, ScrollingFrame top-2..top-50, footer «Вы: #N» если игрок вне топ-50, countdown «Обновится через Ns» справа сверху. **Avatar thumbnails**: `Players:GetUserThumbnailAsync(userId, HeadShot, Size150x150)` async, кэш в module-level `{ [userId] = imageId }`, skeleton-placeholder до загрузки, fade-in при готовности. Loading skeleton (10 строк) до первого fetch'a, «Сервис недоступен, обновляем...» при ошибке.
 - [x] **HUD-payload расширен**: `buildHudPayload` шлёт `dailyState { canClaim, currentStreak, nextDay, secondsUntilNextDay, totalDaysClaimed }`, `activeBoosts` (с `remainingSeconds` на момент payload'а) и `leaderboardPlacement` ({coinsRank, depthRank, coinsValue, depthValue}). `PlayerDataMapper` + `HudState` синкают мгновенно. ProfileService template-мердж добавил поля старым профилям без миграции.
 - [x] **`Net:Connect("PlayerStats")`** в `init.client.lua`: при `dailyState.canClaim == true` и `_autoOpenedThisSession == false` автоматически открывает `DailyRewardModal`. `kind="daily_available"` в Notify — переоткрытие модала после полуночи без перезахода.
 - [x] **`Constants.DAILY`** (`cycleDays=7`, `grantBoostAtDay7=true`, `streakResetAfterMissedDays=2`, `rolloverCheckInterval=60`) + **`Constants.LEADERBOARD`** (`COINS_MAP/DEPTH_MAP` ключи, `topSize=50`, `refreshIntervalSeconds=30`, `expirationSeconds=30 дней`, `writeThresholdCoins=100`, `writeThresholdDepth=5`). Версионируем `_v1` — при изменении схемы старый лидерборд остаётся как archive.
 
-**Тест:** свежий профиль → автоoпен `DailyRewardModal` с Day 1 highlighted → [ЗАБРАТЬ] (после 0.4с) → coin-rain + sell_success звук + закрытие → TopBar показывает 🔥 1 + +500 монет через AnimatedNumber. `/setday +1` → перезаход → Day 2 (Day 1 ✓). `/setday +3` → стрик сброшен в 1. 7 итераций `/setday +1` → Day 7 даёт +50k + 30-min x2 boost → `BoostChip ⚡ x2 · 29:59` тикает → продажа руды на +100% монет. Реальное время: вход в 23:55 UTC → ждать → notify «Новая награда!» без перезахода. 🏆 таб → skeleton ~2с → топ-50 с avatar'ами, спотлайт топ-1 короной, своя строка золотом подсвечена. Toggle монеты/глубина — оба board'a в state. Перезаход в boost'е — выживает (expiresAt в профиле). `/reset` НЕ трогает dailyState/activeBoosts; `/resetdaily` отдельно.
+**Тест:** свежий профиль → автоoпен `DailyRewardModal` с Day 1 highlighted → [ЗАБРАТЬ] (после 0.4с) → coin-rain + sell_success звук + закрытие → `CurrencyRibbon` показывает 🔥 1 + +500 монет через AnimatedNumber. `/setday +1` → перезаход → Day 2 (Day 1 ✓). `/setday +3` → стрик сброшен в 1. 7 итераций `/setday +1` → Day 7 даёт +50k + 30-min x2 boost → `BoostChip ⚡ x2 · 29:59` тикает → продажа руды на +100% монет. Реальное время: вход в 23:55 UTC → ждать → notify «Новая награда!» без перезахода. Dock → Ещё → leaderboard → skeleton ~2с → топ-50 с avatar'ами. Toggle монеты/глубина — оба board'a в state. Перезаход в boost'е — выживает (expiresAt в профиле). `/reset` НЕ трогает dailyState/activeBoosts; `/resetdaily` отдельно.
 
 **Дата закрытия:** 2026-06-02.
 
@@ -299,19 +343,22 @@
 
 **Цель:** жанро-определяющая механика. Без неё mining-игра не выживает на Roblox.
 
-- [x] **`shared/data/PetDatabase.lua`**: 10 питомцев, разные rarity (common → mythic), эффекты: `damageBoost`, `luckBoost` (шанс комнат), `coinBoost`, `multiMine` (шанс ломать 2 блока). Каждый пет — `{ id, name, rarity, icon, color, effect = { kind, value } }`. Лукапы `byId` / `byRarity` строятся один раз.
-- [x] **`server/core/PetManager.lua`**: DI-менеджер (паттерн RebirthManager/DailyReward). `Net:Handle("HatchEgg", count)` (валидация монет, weighted roll, append в `playerData.pets`, авто-equip первого), `Net:Handle("EquipPet", uid)`, `Net:Handle("UnequipPet")`, `onProfileLoaded` (ensure-поля + чистка «висячего» equippedPet), dev-методы `devHatch/devGivePet/devClearPets`. 1 equip slot на старте (`Constants.PETS.maxEquipped`).
-- [x] **`server/core/EggManager.lua`**: 1 egg type («Basic Egg», `Constants.PETS.eggs.basic`), цена в монетах, `clampCount` (batch 1..10), `totalCost`, `hatch` делегирует weighted roll в `PetLogic.rollHatch`.
-- [x] **`client/ui/hud/panels/PetsPanel.lua`** (6-й таб 🐾): индикатор активных бустов, Basic Egg + кнопки «Открыть 1× / 10×», грид owned-петов через `s:Computed` ВНУТРИ `[Children]`, equip/unequip по клику. `client/ui/hud/components/PetCard.lua` — карточка пета (rarity-stroke, ZIndex 2+ на тексте).
-- [x] **Pet visual** (`client/ui/PetVisual.lua`): Neon-сфера rarity-цвета + BillboardGui-иконка парит сбоку от HumanoidRootPart, RenderStepped: орбита + bobbing (sin) + вращение. Респавн обрабатывается автоматически.
-- [x] **Hatch animation** (`client/ui/PetHatchFX.lua`): полноэкранный overlay — трясущееся 🥚 → rarity-цветной shockwave-burst → reveal-карточки с pop-in (Back/Out, stagger). Поддержка 1× и 10× (грид), tap-to-skip, авто-закрытие.
-- [x] **`Net:Handle("HatchEgg", count)`** — батч до 10 яиц за раз (`Constants.PETS.hatchBatchMax`), для «open 10×». Сервер клампит count.
-- [x] **Эффекты влияют на расчёты** (формулы — единый источник `shared/util/PetLogic.lua`): `damageBoost` → урон в `MiningEngine:hitBlock`; `luckBoost` → множитель шанса комнат; `multiMine` → доп. блок ломается мгновенно, кладётся в инвентарь; `coinBoost` → `SellInventory` аддитивно в boost-стадию (порядок multiSell→rebirth→boost сохранён).
+- [x] **`shared/data/PetDatabaseEntries.lua`** + **`PetDatabase.lua`**: **30 питомцев**, rarity common×6 / uncommon×6 / rare×6 / epic×5 / legendary×4 / mythic×3. Эффекты: `damageBoost`, `luckBoost`, `coinBoost`, `multiMine`. Каждый пет — `{ id, name, rarity, icon, modelName, color, effect }`. 3D `modelName` для `PetModelKit`.
+- [x] **`server/core/PetManager.lua`**: DI-менеджер (паттерн RebirthManager/DailyReward). `Net:Handle("HatchEgg", count)` (валидация монет, weighted roll, append в `playerData.pets`, авто-equip первого), `Net:Handle("EquipPet", uid)`, `Net:Handle("UnequipPet")` — **multi-slot** (до `PetLogic.maxEquipped`, +2 через gamepass). `onProfileLoaded` (ensure-поля + чистка битых equipped uid). Dev: `devHatch/devGivePet/devClearPets`, `grantHatch` для dev products.
+- [x] **`server/core/PetAssetBootstrap.lua`**: клон `Workspace.Pets`/`Eggs` → `ReplicatedStorage.PetKit`.
+- [x] **`server/core/EggManager.lua`**: 1 рабочий egg type («basic», 1000 coins), `clampCount` (batch 1..10), `totalCost`, `hatch` → `PetLogic.rollHatch`.
+- [x] **`client/ui/hud/panels/PetsPanel.lua`**: hatch Basic Egg 1×/10×, грид owned-петов, equip/unequip. Доступ: **dock → «Ещё» → pets** (`LeftSidebar.MORE_TABS`).
+- [x] **`client/ui/hud/components/PetCard.lua`** — карточка пета (rarity-stroke, ZIndex 2+ на тексте).
+- [x] **Pet visual** (`client/ui/PetVisual.lua`): **3D-клоны** через `PetModelKit.clonePetDisplay`, follow за игроком (arc slots, bobbing). Не emoji-сфера.
+- [x] **Hatch animation** (`client/ui/PetHatchFX.lua`): полноэкранный overlay — ViewportFrame яйцо, тряска → rarity shockwave → reveal-карточки с 3D preview. 1× и 10×, tap-to-skip, авто-закрытие ~2.8с.
+- [x] **`client/core/EggMachines.lua`**: ProximityPrompt на моделях в `Workspace.Eggs`; только **Basic** реально hatch'ит, остальные — toast «скоро» / «используй меню питомцев».
+- [x] **`Net:Handle("HatchEgg", count)`** — батч до 10 (`Constants.PETS.hatchBatchMax`).
+- [x] **Эффекты** (`shared/util/PetLogic.lua`): damage → `MiningEngine`; luck → комнаты; multiMine → bonus block; coinBoost → `SellInventory` (аддитивно в boost-стадию).
 - [x] **DevCommands**: `/egg [N]`, `/hatch`, `/pet <id>`, `/clearpets`.
 
-**Тест:** купил Basic Egg → нажал HATCH → анимация → пет в инвентаре → equip → урон вырос. 10x работает.
+**Тест:** купил Basic Egg → HATCH → анимация → пет в инвентаре → equip → урон вырос. 10× работает. Dock → Ещё → pets открывает панель.
 
-**Дата закрытия:** 2026-06-03.
+**Дата закрытия:** 2026-06-03 (контент расширен до 30 петов + 3D — Фаза 17 WIP).
 
 ---
 
@@ -329,11 +376,11 @@
   - Egg 10x (199 Robux): 10 яиц через `PetManager:grantHatch` + `kind="egg_purchase"` → PetHatchFX.
 - [x] **`server/core/MonetizationManager.lua`**: DI (profileManager, onProfileChanged, notify, petManager). `ProcessReceipt` + DataStore `PurchaseHistory_v1` (защита от двойного начисления). `PromptGamePassPurchaseFinished` + `onProfileLoaded` → `UserOwnsGamePassAsync` (source of truth) → кэш `playerData.gamepasses`. DevHooks: `devGrantPass` / `devGrantProduct`.
 - [x] **`shared/util/MonetizationLogic.lua`**: единый источник формул (ownsGamepass, coinBoost, petSlotBonus, lookup by id).
-- [x] **UI Shop**: 7-й таб 🛒 `ShopPanel` + `ShopCard`, PURCHASE → `PromptGamePassPurchase` / `PromptProductPurchase` (disabled при id=0 + подсказка Studio).
-- [x] **Owned status**: gamepasses в payload → TopBar `👑 VIP` chip, ShopPanel «✓ КУПЛЕНО», PetsPanel «слотов N/3», auto-sell через `autoSellUnlocked` в upgrades.
+- [x] **UI Shop**: `ShopPanel` (dock → «Ещё» → shop) + `ShopCard`, PURCHASE → `PromptGamePassPurchase` / `PromptProductPurchase` (disabled при id=0 + подсказка Studio).
+- [x] **Owned status**: gamepasses в payload → VIP через `PlayerTag`/`MonetizationManager` (BillboardGui на Head), ShopPanel «✓ КУПЛЕНО», PetsPanel «слотов N/3», auto-sell через `autoSellUnlocked` в upgrades.
 - [x] **DevCommands**: `/grantpass <key>`, `/grantproduct <key> [N]` (эмуляция в Studio).
 
-**Тест:** `/grantpass vip` → TopBar 👑 VIP, продажа +10% монет. `/grantpass autoSell` → auto-sell при полном инвентаре. `/grantpass petSlots` → экип 3 петов, «слотов 3/3». `/grantproduct coinsSmall` → +10k. `/grantproduct egg10` → PetHatchFX 10×. В проде: подставить реальные id в Constants → unlisted → тест-Robux.
+**Тест:** `/grantpass vip` → VIP tag на голове, продажа +10% монет. `/grantpass autoSell` → auto-sell при полном инвентаре. `/grantpass petSlots` → экип 3 петов, «слотов 3/3». `/grantproduct coinsSmall` → +10k. `/grantproduct egg10` → PetHatchFX 10×. В проде: подставить реальные id в Constants → unlisted → тест-Robux.
 
 **Дата закрытия:** 2026-06-03.
 
@@ -343,19 +390,19 @@
 
 **Цель:** ключевое удержание — коллекционирование **руды** (не петов). Игрок видит прогресс «Открыто N/M», охотится за редкими находками и закрывает слои ради milestone-монет.
 
-- [x] **`shared/util/DiscoveryLogic.lua`**: каталог 30 руд из `OreDatabase` (без `test_*`), прогресс по слою/всего, `milestoneReward(layerId)`.
+- [x] **`shared/util/DiscoveryLogic.lua`**: каталог **54 discoverable** руд из `OreDatabase` (без `test_*`), прогресс по слою/всего, `milestoneReward(layerId)`.
 - [x] **`Constants.DISCOVERY.layerMilestoneCoins`**: разовая награда за **полностью** открытый слой (dirt → void), без ретро-выдачи при миграции.
 - [x] **`playerData`**: `discoveredOres`, `discoveredMilestones` — **не сбрасываются** при ребёрте.
 - [x] **`server/core/DiscoveryManager.lua`**: `recordDiscovery` при `loot.added > 0` (основная + bonus multiMine руда), notify `kind="ore_discovered"` / `kind="layer_milestone"`, `onProfileLoaded` бэкфилл из инвентаря (тихо).
 - [x] **MineBlock** (`init.server.lua`): хук после `MiningLoot.tryAddOre`, `buildHudPayload` шлёт `discoveredOres`, `discoveredMilestones`, `discoveryProgress`.
-- [x] **UI**: 8-й таб 📖 **ЖУРНАЛ** (`TabBar` ~506px), `JournalPanel` + `OreEntry` (??? до находки), заголовок «Открыто X/Y».
+- [x] **UI**: таб 📖 **ЖУРНАЛ** в dock (`JournalPanel` + `OreEntry` с pixel/PNG иконками через `OreIcon`), заголовок «Открыто X/Y» по слоям.
 - [x] **DevCommands** (Studio): `/discover <oreId>`, `/discoverall`, `/resetjournal`.
 - [x] **Клиент Notify**: `OreDiscoveryFX` (reveal «НОВАЯ НАХОДКА» + очередь), `RewardFX` на milestone; звук break/sell.
-- [x] **Визуал блоков по редкости**: материал (Slate→Foil), reflectance, PointLight-аура (epic+, под капом для FPS), sparkle-частицы (rare+), пульс legendary/mythic (`MiningRenderer`). Neon с блоков убран (нагрузка).
+- [x] **Визуал блоков по редкости** (эволюция Фаз 13→17): low-poly `color` + jitter, `protrusion="crystal"` на самоцветах, `OreShellMeshes` накладки, `LayerProfile.BLOCK_GLOW` caps, proximity PointLights (epic+), ambient particles из `ReplicatedStorage.OreAmbientFX`, `OreFXPalette` tint. Старые `OreDef.material/reflectance/glow` **сняты** в low-poly pass.
 
 **Тест:** `/discover coal` → запись в журнале + тост. Добыть новую руду в игре → тост + слот открыт. Закрыть все руды слоя Dirt → milestone-монеты + тост. Ребёрт → журнал на месте. Перезаход → тот же журнал.
 
-**Дата закрытия:** 2026-06-03 (ждёт Studio smoke + коммит вместе с Фазой 12).
+**Дата закрытия:** 2026-06-03 (коммит `55b6a7c`, вместе с Фазой 12).
 
 ---
 
@@ -363,16 +410,16 @@
 
 **Цель:** игра выделяется в Roblox Discover и узнаётся как mining-sim; спуск вглубь ощущается атмосферой.
 
-- [x] **Материалы по слоям** (заполнен `OreDef.material/reflectance/glow` в `shared/data/OreDatabase.lua`): Dirt→`Ground`, Stone→`Slate`, металлы (Copper/Iron→`Metal`, Silver/Gold→`Foil`) + reflectance, самоцветы (Sapphire/Ruby/Topaz/Emerald/Diamond→`Glass`+reflectance), Diamond reflectance 0.4, Obsidian→тёмный `Glass`, мистические (Astralite/Spirit Shard/Nebula/Star Fragment/Void Crystal)→`glow` (шиммер Foil, Neon с блоков убран ради FPS). `MiningRenderer:_createPart` читает OreDef с приоритетом над `ORE_VISUAL_BY_RARITY`. `test_glow` намеренно без полей — проверяет fallback.
-- [x] **Lighting по слоям** (`Constants.LAYER_LIGHTING` + расширенный `client/core/LayerEnvironment`): твин `Brightness`, `ClockTime`, `FogEnd` и `Atmosphere.Density/Haze/Color` — dirt (яркий полдень) → void (почти тьма). Без fullscreen post-processing (нет ColorCorrection/Bloom) — в духе Phase 7.
-- [x] **Creator Hub бриф** (`docs/marketing/CreatorHub.md`): название RU/EN, описание RU/EN с ключами mining/pets/rebirth/simulator, genre tags (Simulator + Adventure), pipeline загрузки.
-- [x] **Чеклист ассетов + placeholder-пути** (`docs/marketing/assets/`): icon 512×512 (читается в 64×64), 4 thumbnails (копание / rebirth FX / egg hatch / leaderboard), key art brief. Финальные PNG разработчик рендерит/загружает сам.
-- [ ] **Финальные PNG в Creator Hub** (вне кода): icon, 4 thumbnails, key art — загружает разработчик по `docs/marketing/CreatorHub.md` §6.
-- [ ] **icon-тест 5 людей** (плейтест): 5 случайных человек по иконке 64×64 угадывают «копание/шахта».
+- [x] **Материалы по слоям** (Фаза 14, **заменено в Фазе 17**): изначально заполнялись `OreDef.material/reflectance/glow`; в low-poly pass перешли на `color` + `protrusion` + shell meshes. Коммит Фазы 14 (`e1ce55e`) — исторический; актуальный визуал — Фаза 17.
+- [x] **Lighting по слоям** (`Constants.LAYER_LIGHTING` + `client/core/LayerEnvironment`): твин `Brightness`, `ClockTime`, `FogEnd` и `Atmosphere` — dirt (полдень) → void (почти тьма). Без fullscreen post-processing.
+- [x] **Creator Hub бриф** (`docs/marketing/CreatorHub.md`): название RU/EN, описание, genre tags, pipeline загрузки.
+- [x] **Чеклист ассетов** (`docs/marketing/assets/`): icon, thumbnails, key art brief.
+- [ ] **Финальные PNG в Creator Hub** (вне кода): icon, thumbnails — загружает разработчик.
+- [ ] **icon-тест 5 людей** (плейтест): угадывают «копание/шахта» по 64×64.
 
-**Тест (Studio smoke):** Play Solo → докопать до Stone+ → проверить смену материалов руд (rare-руды отличаются от common по OreDef-материалу, не только по rarity-таблице) и переход освещения Dirt→Stone (Brightness/ClockTime/Atmosphere). Полный чеклист — в `STATUS.md` (smoke Фазы 14).
+**Тест (Studio smoke):** Play Solo → смена освещения Dirt→Stone; rare-руды визуально отличаются (shell/glow/protrusion). Полный чеклист — `STATUS.md`.
 
-**Критерий готовности:** 5 человек по иконке понимают «копание/шахта»; rare-руды визуально отличаются от common по OreDef-материалу; переход Dirt→Stone ощущается атмосферой.
+**Критерий готовности:** 5 человек по иконке понимают «копание/шахта»; rare-руды отличимы от common; переход Dirt→Stone ощущается атмосферой.
 
 ---
 
@@ -389,7 +436,7 @@
 - [x] **`shared/util/QuestLogic.lua`** — единственный источник цепочки квестов (~10 шт), `metric` ∈ blocksMined / coinsEarned / depth / oresDiscovered / rebirths / shaftRooms. Прогресс выводится из существующих счётчиков профиля (без отдельного per-event трекинга). `activeQuest` / `isComplete` / `buildActivePayload` / `claimedCount` / `totalCount`.
 - [x] **`server/core/QuestManager.lua`** — DI (паттерн DiscoveryManager). `onProfileLoaded` (ensure `claimedQuests`), `evaluate` (тост «забери награду» один раз на квест), `claim` (валидирует активный+выполненный+незабранный, начисляет `reward.coins/gems`, `claimedQuests[id]=true`). DevHooks `devResetQuests` / `devCompleteActive`.
 - [x] **`playerData.claimedQuests`** — список забранных квестов, **не сбрасывается** при ребёрте.
-- [x] **UI** (`client/ui/hud/panels/GoalsPanel.lua`): 9-й таб 🎯 ЦЕЛИ — активный квест с прогресс-баром, наградой и кнопкой [ЗАБРАТЬ] (`Net:Invoke("ClaimQuest", id)`), «✅ Все цели выполнены!» в конце. `TabBar` → 9 табов (570px), `MainPanel` → GoalsPanel.
+- [x] **UI** (`client/ui/hud/panels/GoalsPanel.lua`): таб 🎯 ЦЕЛИ в dock — активный квест с прогресс-баром, наградой (coins + gems, gems в UI награды видны, в ribbon — нет) и кнопкой [ЗАБРАТЬ] (`Net:Invoke("ClaimQuest", id)`), «✅ Все цели выполнены!» в конце. Badge на иконке goals при claimable.
 - [x] **`Net:Handle("ClaimQuest")`** + хуки `questManager:evaluate` в MineBlock / processDepthUpdate / onEconomyChanged.
 
 **Достижения (подключение существующего модуля):**
@@ -397,22 +444,79 @@
 - [x] **`playerData.unlockedAchievements`, `shaftRoomCount`** — персист, переживают ребёрт. `shaftRoomCount++` при `roomGenerated` в MineBlock.
 - [x] **UI**: список достижений в `GoalsPanel` (✓ для разблокированных, награда для остальных), `buildHudPayload` шлёт `achievements` (только видимые).
 
-**Фонарик (видимость в шахте):**
-- [x] **`client/core/Headlamp.lua`** — `PointLight` на `HumanoidRootPart` (fallback Head), тёплый белый, без теней (1 источник — дёшево). `setDepth(depth)` плавно повышает `Range`/`Brightness` с глубиной (поверхность 26/1.6 → void 42/3.0): рядом всегда видно, тьма остаётся вдали (атмосфера Фазы 14 сохранена).
-- [x] **`Constants.HEADLAMP`** — конфиг (color/baseRange/maxRange/baseBrightness/maxBrightness/fullPowerDepth/shadows).
-- [x] **Интеграция** (`init.client.lua`): `attach` в `onCharacterAdded`, `setDepth` в `depthTracker:onChanged`, `destroy` при выходе.
+**Освещение шахты (видимость):**
+- [x] **`Constants.CURSOR_LIGHT`** + реализация в **`MiningRenderer`** — `PointLight` следует за лучом мыши/тача, освещает блок под прицелом. **Активный способ** видимости в шахте.
+- [x] **`client/core/Headlamp.lua`** — модуль сохранён, но **`Constants.HEADLAMP.enabled = false`** (свет перенесён на курсор). При включении: PointLight на HRP, масштаб с глубиной.
+- [x] **Интеграция** (`init.client.lua`): `Headlamp.attach/setDepth` вызывается, но no-op пока `enabled=false`.
 
 - [x] **DevCommands**: `/resetquests`, `/completequest`.
 
-**Тест:** копать Dirt → доминирует грязь, редко руда; таб 🎯 → активный квест растёт, по выполнении тост + [ЗАБРАТЬ] → монеты + следующий квест; открыть 10 руд → ачивка `collector_10` + тост; фонарик освещает вокруг игрока, глубже — ярче; перезаход/ребёрт → квесты/достижения на месте. Полный smoke-чеклист — в `STATUS.md`.
+**Тест:** копать Dirt → доминирует грязь; таб 🎯 → квест растёт; collector_10 при 10 находках; **свет на курсоре** освещает блок под прицелом; перезаход/ребёрт → квесты/журнал на месте. Полный smoke — `STATUS.md`.
 
-**Дата закрытия:** 2026-06-03 (ждёт Studio smoke + коммит).
+**Дата закрытия:** 2026-06-03 (коммит `2d311dd`).
+
+---
+
+### █ Фаза 17 — UI/UX Overhaul (discovery-ready polish) 🟢 (закоммичено)
+
+**Цель:** HUD уровня топовых Roblox mining-sim — читаемый dock, кастомные иконки, модальные панели, атмосфера слоёв. Без этого игра выглядит «прототипом» в Discover.
+
+**Новый layout HUD** (заменяет TopBar + горизонтальный TabBar):
+- [x] **`CurrencyRibbon`** — левый верх: монеты (`ResourceChip` + `UiAssets.coin`), `DepthBar` (глубина + прогресс слоя), чипы ребёрта / boost / streak.
+- [x] **`InventoryWidget`** — правый верх: заполненность рюкзака (суммарный count / capacity), цвет fill-bar по заполнению.
+- [x] **`LeftSidebar`** — нижний центрированный dock: 5 nav (рюкзак, кирка, цели, журнал, «ещё») + кнопка **ПРОДАТЬ** + **Home pill** (`GoHome` + `HomeFX`); popup «Ещё» → **pets**, stats, rebirth, leaderboard, shop.
+- [x] **`MainPanel`** — модальное окно 600×450 с backdrop, scale-in анимацией, цветной header по активному табу; все 9 content-панелей внутри (`panelOpen` / `activeTab` в `HudState`).
+- [x] **`DockIcon`** + **`UiInteract`/`UiMotion`** — иконка 30px + hover/press scale; sell-вариант — зелёный CTA.
+- [x] **`theme.lua`** — modern dark navy палитра, `TAB_ACCENTS`, `TAB_LABELS`, `LAYER_COLORS`.
+- [x] **`shared/data/UiAssets.lua`** — реестр 19 иконок (coin, depth, tab_*, upg_*); rbxassetid в `ROBLOX_IMAGES`, fallback на `ReplicatedStorage.uiAssets` (`tab_pets` rbxassetid пуст — PNG fallback).
+- [x] **`assets/ui/`** + **`assets/ui/ores/`** — PNG 256×256 + `prepare_icons.py` / `prepare_ore_icons.py`; Rojo → `uiAssets`.
+- [x] **`UpgRow`** — кастомные иконки апгрейдов через `UiAssets.upgrade()`.
+- [x] **`SellButton.activate()`** — логика продажи отвязана от виджета; вызывается из dock.
+
+**Атмосфера и визуал блоков:**
+- [x] **`LayerProfile.lua`** — `IDENTITY` (music, enter-sound, particles, fog, breakDust) + `BLOCK_GLOW` (per-layer rarity glow); `Constants.LAYER_PROFILE` — алиас.
+- [x] **`LayerAmbience.lua`** — ambient при смене слоя: enter-звук, ParticleEmitter (sparkle + fog) на персонаже, интеграция в `init.client.lua`.
+- [x] **`OreFXPalette.lua`** — единая палитра VFX для `MiningRenderer` и `OreDiscoveryFX`.
+- [x] **`OreShellMeshes.lua`** — mesh-накладки rare/epic+ (Kit в Workspace/ReplicatedStorage).
+- [x] **`MiningRenderer`** — shell meshes, layer-aware block glow, layer break-dust, `OreFXPalette` tint, cursor light, create-budget 25/frame, ~1.9k строк.
+- [x] **30 питомцев** + **3D PetVisual** + **PetModelKit** (расширение Фазы 11).
+- [x] **54 baked ore icons** (`OreIconPixels/`).
+
+**Техдолг / блокеры до закрытия фазы:**
+- [ ] **Legacy-панели** — `TabBar.lua`, `TopBar.lua`, `BottomDock.lua` не монтируются; удалить после smoke.
+- [ ] **Tutorial smoke** — сцены ищут `Tab_inventory` / `SellButton`; `DockIcon` сохраняет `Tab_<tabId>` — нужен плейтест нового layout.
+- [ ] **Mobile layout** — fixed 600×450 modal, dock ~446px; только `DailyRewardModal` адаптивен. Post-MVP или до soft launch — решить.
+- [ ] **OreDiscoveryFX** — проверить fade-out (возможная ссылка на неверную переменную).
+- [ ] Studio smoke + **коммит** незакоммиченных изменений Фазы 17.
+
+**Тест:** Play Solo → dock снизу, ribbon сверху; клик таба → модалка; ПРОДАТЬ → монеты; Ещё → pets; смена слоя → ambient; rare-руда с shell. Чеклист — `STATUS.md`.
+
+---
+
+## Известные пробелы до soft launch (код, не scope creep)
+
+Это **не новые фичи**, а дыры между «MVP по чеклисту» и «можно пускать игроков»:
+
+| Приоритет | Проблема | Где в коде |
+|-----------|----------|------------|
+| **P0** | Глубина **client-trusted** — spoof `maxDepthReached`, depth leaderboard, квесты | `init.server.lua` → `UpdateDepth` |
+| **P0** | Gamepass/DevProduct **`id = 0`** — реальные покупки невозможны | `constants.GAMEPASSES`, `DEVPRODUCTS` |
+| **P0** | Фаза 17 **не закоммичена** | git working copy |
+| **P1** | Нет reach-validation для mine clicks | `AntiCheat` + `MiningEngine` |
+| **P1** | Плейтест Фазы 5 (FPS, delta traffic) не пройден | `STATUS.md` чеклист |
+| **P1** | Sound IDs — `TODO playtest`, broken → тишина | `SoundDatabase` |
+| **P1** | `millionaire` aura reward не применяется | `AchievementManager` |
+| **P2** | Достижения только на server (не в `shared/`) | архитектурный долг |
+| **P2** | Pets за 2 тапа (dock → Ещё) — слабая discoverability | `LeftSidebar` |
+| **P2** | После 10 квестов — мало долгосрочных целей | контент, патч 1.1 |
 
 ---
 
 ### █ Фаза 15 — Soft Launch & Стабилизация 🔴
 
 **Цель:** релиз с минимальным риском.
+
+**Предусловия (из таблицы пробелов выше):** P0 закрыты — depth validation, Creator Hub ids, коммит Фазы 17.
 
 - [ ] Solo плейтест 30+ минут подряд (сам разработчик).
 - [ ] Тест с 2 игроками (одновременно копают, проверка `playerData` изоляции).
@@ -422,7 +526,7 @@
 - [ ] **Unlisted release**: 10–20 друзей/Discord-знакомых играют 3 дня.
 - [ ] Сбор фидбека → 1 баланс-патч.
 - [ ] **Public release** + первые 1–2 промо-поста в Roblox-сообществах.
-- [ ] Чек по списку «MVP готов» — все 12 пунктов зелёные.
+- [ ] Чек по списку «MVP готов» — все **14** пунктов зелёные (включая реальные id монетизации).
 
 ---
 
@@ -430,31 +534,36 @@
 
 **Патч 1.1** (через 2 недели после релиза):
 - Trading между игроками (P2P UI, античит).
-- 2-й egg type (Gold Egg) + 5 новых питомцев.
-- Расширение цепочки квестов + новые достижения (база подключена в Фазе 16).
+- 2-й и 3-й egg types (desert, candy — `EggMachines` уже ждут) + баланс hatch weights.
+- Расширение цепочки квестов (сейчас **10**) + новые достижения (сейчас **7** видимых).
+- Server-side depth validation (если не успели до launch).
+- Gem UI + первый sink за гемы.
 
 **Патч 1.2** (через месяц):
-- Limestone Layer полировка (новые материалы, звуки, балансы).
+- Limestone+ **feel pass** (отдельный QA; данные/ambient уже в коде).
 - Гильдии / кланы.
 - Limited-time event: «Lucky Hour» — x2 luck комнат на 60 минут раз в день.
 
 **Большие обновления (post-MVP):**
-- Limestone → Crimson → Marble → Obsidian → Void (полировка контента слоёв).
-- Mine Shafts как отдельная фича (постоянные проходы вниз, бонусы к редкости).
-- Расходники: молоток, бомба.
-- Гемы и магазин за гемы.
-- Боссы (если решим — против исходного решения Фазы 0).
+- Crimson → Marble → Obsidian → Void — контент-пассы (руды уже в `OreDatabase`).
+- Mine Shafts как отдельная фича (сейчас — скрытые комнаты `SHAFT_*`).
+- Расходники: молоток, бомба, auto-mine.
+- Полноценная gem-экономика (сейчас только accrue).
+- Боссы (`boss_slayer` achievement уже ждёт).
+- Pet meta: delete/fuse/level, лимит инвентаря петов.
 - NPC, сейсмические события, биом-вариации каверн.
 
 ---
 
 ## Примечания
 
-- Сейчас в `src/` ~15k+ строк в ~95 файлах (после Фаз 12–14 + 16: +DiscoveryLogic/Manager, JournalPanel, OreEntry, OreDiscoveryFX, QuestLogic, QuestManager, GoalsPanel, Headlamp; AchievementManager подключён). Ожидаемый объём к концу MVP — **~15–18k строк**.
+- Сейчас в `src/` **~35k строк / 230 .lua файлов** (client 109 / shared 96 / server 25). `MiningRenderer` ~1.8k строк, `init.server.lua` ~870, `Tutorial.lua` ~850, `GoalsPanel.lua` ~635 — кандидаты на разбиение (правило ≤300 строк нарушено).
+- Коммиты: `2d311dd` — Фаза 16 (2026-06). Далее ~месяц работы копился незакоммиченным; текущий коммит вносит Фазу 17 + все пост-MVP системы + синхронизацию доков. Урок: коммитить мелко и ежедневно, не копить месяц изменений в рабочей копии.
+- **Долг качества:** 0 автотестов, нет CI. `selene`/`stylua` установлены (`rokit.toml`), но без конфигов и не в CI → фактически не форсятся. `--!strict` во всех файлах, но ~346 `: any` в 84 файлах (границы модулей/DI не типизированы).
+- **Синхронизация документов:** при изменении контента править цифры в таблице «Снимок актуального состояния» в начале этого файла; `STATUS.md` — технический журнал, может отставать.
 - AI-агент пишет код фазами; разработчик — Studio, Rojo, плейтест, фидбек по чеклисту фазы.
-- Баланс настраиваем после первого 30-минутного прогона по чек-листу «MVP готов».
+- Баланс настраиваем после первого 30-минутного прогона; rebirth cost ×5^N и void HP 2500 — **не playtested at scale**.
 - Звуки на MVP — бесплатная библиотека Roblox; кастомные ассеты — post-MVP.
-- Лимиты Cursor (Pro+ ~$70 кредитов): на каждую новую фазу — новый чат, для рутины — Auto, для тяжёлых рефакторингов (фазы 3, 5, 11) — премиум-модель точечно.
 
 ## Правило защиты от scope creep
 

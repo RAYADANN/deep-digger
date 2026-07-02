@@ -8,3 +8,13 @@ Thumbs.db
 *.rbxl
 *.rbxlx
 serve.log
+
+# Non-game / unrelated artifacts (не относятся к Deep Digger)
+Меню/
+Схемотехника/
+*.xlsx
+# financial modeling scripts (generate the .xlsx above)
+tools/build_fin_report.py
+tools/devex_fin_model.py
+tools/fill_danya_xlsx.py
+tools/project_fin_model.py

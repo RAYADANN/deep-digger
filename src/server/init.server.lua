@@ -9,6 +9,10 @@ local modules = ReplicatedStorage:WaitForChild("Packages")
 local Logger = require(shared.util.Logger)
 local Constants = require(shared.constants)
 local LayerUtil = require(shared.util.LayerUtil)
+local MiningReach = require(shared.util.MiningReach)
+local RebirthLogic = require(shared.util.RebirthLogic)
+local MutationLogic = require(shared.util.MutationLogic)
+local DailyQuestLogic = require(shared.util.DailyQuestLogic)
 local Net = require(modules.Net)
 local OreDatabase = require(shared.data.OreDatabase)
 local ProfileManager = require(script.core.ProfileManager)
@@ -30,8 +34,59 @@ local DiscoveryLogic = require(shared.util.DiscoveryLogic)
 local QuestManager = require(script.core.QuestManager)
 local QuestLogic = require(shared.util.QuestLogic)
 local AchievementManager = require(script.core.AchievementManager)
+local PlayerTag = require(script.core.PlayerTag)
+local PetAssetBootstrap = require(script.core.PetAssetBootstrap)
+local MineDeckCollision = require(script.core.MineDeckCollision)
+local PromoCodeManager = require(script.core.PromoCodeManager)
+local SocialRewardManager = require(script.core.SocialRewardManager)
 
 local log = Logger.new("Server:Init")
+
+local HttpService = game:GetService("HttpService")
+local RunService = game:GetService("RunService")
+local _studioMineTestDone = false
+
+local function runStudioMineEntryTest(player: Player, playerData: any)
+    if not RunService:IsStudio() or _studioMineTestDone then
+        return
+    end
+    _studioMineTestDone = true
+    task.spawn(function()
+        task.wait(4)
+        local char = player.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if not hrp or not hrp:IsA("BasePart") then
+            workspace:SetAttribute("DD_mineSelfTest", "no_character")
+            return
+        end
+        local origin = MiningReach.resolveOrigin(workspace)
+        local union = workspace:FindFirstChild("Union")
+        ;(hrp :: BasePart).CFrame = CFrame.new(origin + Vector3.new(0, 5, 0))
+        task.wait(0.5)
+        local yBefore = (hrp :: BasePart).Position.Y
+        for _ = 1, 60 do
+            if not miningEngine:hasSurfaceBlock(player.UserId, 0, 0) then
+                break
+            end
+            miningEngine:hitBlock(player, playerData, 0, 0, 0, true)
+            task.wait(0.05)
+        end
+        task.wait(1.5)
+        local yAfter = (hrp :: BasePart).Position.Y
+        local payload = {
+            unionCollideOff = union and union:IsA("BasePart") and union.CanCollide == false,
+            surfaceMined = not miningEngine:hasSurfaceBlock(player.UserId, 0, 0),
+            fellThrough = yAfter < origin.Y + 0.5,
+            yBefore = yBefore,
+            yAfter = yAfter,
+        }
+        local encoded = HttpService:JSONEncode(payload)
+        workspace:SetAttribute("DD_mineSelfTest", encoded)
+        log:info("[MineSelfTest]", encoded)
+    end)
+end
+
+PetAssetBootstrap.run()
 
 -- Дефолтный FallenPartsDestroyHeight = -500: персонаж умирает на глубине
 -- ~110 м (BLOCK_SIZE_STUDS = 4.5). Шахта у нас бесконечная вниз, поэтому
@@ -55,7 +110,12 @@ end)
 local oreDb = OreDatabase.new()
 local profileManager = ProfileManager.new()
 local miningEngine = MiningEngine.new(oreDb:getAll())
+MineDeckCollision.start(function(userId, gx, gz)
+    return miningEngine:hasSurfaceBlock(userId, gx, gz)
+end)
 local antiCheat = AntiCheat.new()
+local playerTag: any = nil
+local socialRewardManager: any = nil
 
 local remoteSync = Net:RemoteEvent("SyncBlocks")
 local remoteStats = Net:RemoteEvent("PlayerStats")
@@ -170,7 +230,7 @@ local DailyLogic = require(shared.util.DailyLogic)
 local achievementManager: any = nil
 local questManager: any = nil
 
-local function buildHudPayload(playerData)
+local function buildHudPayload(player: Player, playerData)
     local invList = {}
     for oreId, count in pairs(playerData.inventory or {}) do
         if count > 0 then
@@ -224,7 +284,7 @@ local function buildHudPayload(playerData)
         -- SellInventory.
         rebirths = playerData.rebirths or 0,
         rebirthMultiplier = playerData.rebirthMultiplier
-            or (1 + (playerData.rebirths or 0) * 0.1),
+            or RebirthLogic.valueMultiplier(playerData.rebirths or 0),
         -- Phase 10: retention-state.
         dailyState = dailyStatePayload,
         activeBoosts = activeBoostsPayload,
@@ -244,6 +304,7 @@ local function buildHudPayload(playerData)
         -- equippedUids — нормализованный список uid'ов (multi-slot после
         -- gamepass «+2 pet slots»); PetsPanel использует для equip-check.
         gamepasses = playerData.gamepasses or {},
+        shopPurchases = playerData.shopPurchases or {},
         equippedUids = PetLogic.getEquippedUids(playerData),
         petMaxEquipped = PetLogic.maxEquipped(playerData),
         -- Phase 13: журнал находок (кор-механика retention). Клиент резолвит
@@ -256,6 +317,12 @@ local function buildHudPayload(playerData)
         questClaimedCount = QuestLogic.claimedCount(playerData),
         questTotalCount = QuestLogic.totalCount(),
         achievements = if achievementManager then achievementManager:buildPayload(playerData) else {},
+        equippedTitleId = playerData.equippedTitleId,
+        -- P1.5: повторяемые ежедневки (прогресс + claimable + сброс).
+        dailyQuests = DailyQuestLogic.buildPayload(playerData),
+        socialReward = if socialRewardManager
+            then socialRewardManager:buildPayload(player)
+            else nil,
     }
 end
 
@@ -264,7 +331,7 @@ local function syncPlayerHud(player: Player)
     if not playerData then
         return
     end
-    local payload = buildHudPayload(playerData)
+    local payload = buildHudPayload(player, playerData)
     remoteStats:FireClient(player, payload)
     remoteInv:FireClient(player, payload)
 end
@@ -296,6 +363,20 @@ local function syncMiningHud(player: Player)
     })
 end
 
+-- P0.3: правдоподобная глубина из позиции персонажа на сервере. nil, если
+-- персонаж/HRP ещё не реплицировались — тогда заявленной глубине не доверяем.
+local function serverDepthFor(player: Player): number?
+    local character = player.Character
+    if not character then
+        return nil
+    end
+    local root = character:FindFirstChild("HumanoidRootPart")
+    if root and root:IsA("BasePart") then
+        return LayerUtil.depthFromY(root.Position.Y)
+    end
+    return nil
+end
+
 local function processDepthUpdate(player: Player, depth: number)
     local playerData = profileManager:getData(player)
     if not playerData then
@@ -303,6 +384,15 @@ local function processDepthUpdate(player: Player, depth: number)
     end
 
     depth = math.max(0, math.floor(depth))
+    -- P0.3: клампим client-trusted глубину к серверной + slack. Реальный
+    -- спуск (Y персонажа падает) проходит; «телепорт на 9999м» обрезается.
+    local slack = (Constants.DEPTH_VALIDATION and Constants.DEPTH_VALIDATION.slackBlocks) or 6
+    local serverDepth = serverDepthFor(player)
+    if serverDepth then
+        depth = math.min(depth, serverDepth + slack)
+    else
+        depth = math.min(depth, (playerData.maxDepthReached or 0) + slack)
+    end
     local prevDepth = playerData.depth or 0
     local newLayer = LayerUtil.layerFromDepth(depth)
     local stoneLayer = LayerUtil.getLayer("stone")
@@ -355,6 +445,12 @@ local function onEconomyChanged(player: Player)
     end
     syncPlayerHud(player)
     leaderboard:writeIfChanged(player)
+    -- Обновляем тег/ауру если изменились ребёрты или VIP-статус
+    if data then
+        task.defer(function()
+            playerTag:apply(player, data)
+        end)
+    end
 end
 
 local economyManager = EconomyManager.new({
@@ -425,11 +521,25 @@ achievementManager = AchievementManager.new({
     notify = notify,
 })
 
+playerTag = PlayerTag.new({ achievementManager = achievementManager })
+
 questManager = QuestManager.new({
     profileManager = profileManager,
     onProfileChanged = onEconomyChanged,
     notify = notify,
     notifyOnce = notifyOnce,
+})
+
+local promoCodeManager = PromoCodeManager.new({
+    profileManager = profileManager,
+    onProfileChanged = syncPlayerHud,
+    notify = notify,
+})
+
+socialRewardManager = SocialRewardManager.new({
+    profileManager = profileManager,
+    onProfileChanged = syncPlayerHud,
+    notify = notify,
 })
 
 DevCommands.new({
@@ -444,6 +554,11 @@ DevCommands.new({
     monetizationManager = monetizationManager,
     discoveryManager = discoveryManager,
     questManager = questManager,
+    onWipePlayer = function(player: Player)
+        antiCheat:reset(player)
+        miningEngine:resetPlayer(player)
+        sendBlocksSnapshot(player)
+    end,
 })
 
 --[[
@@ -504,19 +619,30 @@ Net:Handle("MineBlock", function(player: Player, clicks: { { x: number, z: numbe
                     if bonusLoot.autoSold then
                         result.autoSold = true
                     end
+                    if bonusLoot.rejected > 0 then
+                        notify(player, {
+                            text = "Рюкзак полон — продайте руду",
+                            icon = "tab_inventory",
+                            color = { r = 255, g = 90, b = 60 },
+                            duration = 2,
+                            kind = "inventory_full",
+                        })
+                    end
                 end
             end
             if loot.autoSold then
                 notifyOnce(player, "auto_sell", {
                     text = "Авто-продажа сработала",
-                    icon = "💰",
+                    icon = "coin",
                     color = { r = 255, g = 210, b = 50 },
                 })
             elseif loot.rejected > 0 then
-                notifyOnce(player, "inventory_full", {
-                    text = "Инвентарь полон!",
-                    icon = "⚠",
+                notify(player, {
+                    text = "Рюкзак полон — продайте руду",
+                    icon = "tab_inventory",
                     color = { r = 255, g = 90, b = 60 },
+                    duration = 2,
+                    kind = "inventory_full",
                 })
             end
             if result.roomGenerated then
@@ -534,10 +660,32 @@ Net:Handle("MineBlock", function(player: Player, clicks: { { x: number, z: numbe
                 end
                 notify(player, {
                     text = roomText,
-                    icon = "✨",
+                    icon = "icon_sparkle",
                     color = LayerUtil.colorToPayload(roomColor),
                     duration = 4.5,
                 })
+            end
+            -- P2.9 (Ore Mutation): сломан мутировавший блок → мгновенный бонус
+            -- = (множитель-1) * базовая ценность руды + «трейлерный» тост.
+            -- База руда уже ушла в инвентарь обычным путём выше.
+            if result.mutation then
+                local mult = MutationLogic.valueMultiplier(result.mutation)
+                local baseValue = result.oreDef.value or 0
+                local bonus = math.floor((mult - 1) * baseValue)
+                if bonus > 0 then
+                    playerData.coins = (playerData.coins or 0) + bonus
+                    playerData.totalCoinsEarned = (playerData.totalCoinsEarned or 0) + bonus
+                    blocksChanged = true
+                    local label = MutationLogic.label(result.mutation) or "Мутация"
+                    local tint = MutationLogic.tint(result.mutation)
+                    notify(player, {
+                        text = ("%s %s! +%d монет"):format(label, result.oreDef.name or "руда", bonus),
+                        icon = "icon_sparkle",
+                        color = if tint then LayerUtil.colorToPayload(tint) else { r = 255, g = 210, b = 50 },
+                        duration = 4,
+                        kind = "mutation",
+                    })
+                end
             end
         elseif result.success then
             blocksChanged = true
@@ -545,7 +693,7 @@ Net:Handle("MineBlock", function(player: Player, clicks: { { x: number, z: numbe
         if result.weakPickaxe then
             notifyOnce(player, "weak_pickaxe", {
                 text = "Кирка слишком слабая для Stone! Прокачайте её (ур. " .. Constants.STONE_PICKAXE_MIN_LEVEL .. "+)",
-                icon = "⛏",
+                icon = "upg_pickaxe",
                 color = { r = 255, g = 140, b = 60 },
                 duration = 3.5,
             })
@@ -575,6 +723,101 @@ Net:Handle("ClaimQuest", function(player: Player, questId: string)
         questManager:evaluate(player)
     end
     return result
+end)
+
+-- P1.5: получение награды за ежедневное задание.
+Net:Handle("ClaimDailyQuest", function(player: Player, questId: string)
+    if typeof(questId) ~= "string" or questId == "" then
+        return { success = false, error = "Invalid quest" }
+    end
+    local result = questManager:claimDaily(player, questId)
+    if result.success then
+        achievementManager:check(player, profileManager:getData(player))
+    end
+    return result
+end)
+
+--[[
+    Телепортация на спаун: ищем SpawnLocation в Workspace,
+    fallback — фиксированные координаты поверхности (y ≈ 108).
+    Cooldown 3 сек: защита от спама.
+]]
+local _goHomeCooldown: { [number]: number } = {}
+Net:Handle("GoHome", function(player: Player)
+    local now = os.clock()
+    local last = _goHomeCooldown[player.UserId] or 0
+    if now - last < 3 then
+        return { success = false, error = "cooldown" }
+    end
+    _goHomeCooldown[player.UserId] = now
+
+    local char = player.Character
+    if not char then return { success = false } end
+    local hrp = char:FindFirstChild("HumanoidRootPart") :: BasePart?
+    if not hrp then return { success = false } end
+
+    local targetCFrame: CFrame
+    local spawnLoc = workspace:FindFirstChildOfClass("SpawnLocation")
+    if spawnLoc and spawnLoc:IsA("SpawnLocation") then
+        targetCFrame = spawnLoc.CFrame + Vector3.new(0, 5, 0)
+    else
+        targetCFrame = CFrame.new(0, 108, 0)
+    end
+
+    hrp.CFrame = targetCFrame
+    return { success = true }
+end)
+
+--[[
+    P2.10 (Depth shortcut): телепорт к началу уже открытого слоя. Слой открыт,
+    если рекорд глубины (maxDepthReached) достиг его depthStart. Сервер
+    прорубает воздушный карман в колонке шахты и ставит игрока внутрь —
+    авторитетно (клиент не может варпнуть в неоткрытый слой). Cooldown 3 с.
+]]
+local _warpCooldown: { [number]: number } = {}
+Net:Handle("TeleportLayer", function(player: Player, layerId: string)
+    if typeof(layerId) ~= "string" or layerId == "" then
+        return { success = false, error = "bad_layer" }
+    end
+    local playerData = profileManager:getData(player)
+    if not playerData then
+        return { success = false, error = "no_profile" }
+    end
+    local layer = LayerUtil.getLayer(layerId)
+    if not layer then
+        return { success = false, error = "unknown_layer" }
+    end
+    if (playerData.maxDepthReached or 0) < layer.depthStart then
+        return { success = false, error = "locked", message = "Слой ещё не открыт" }
+    end
+    local now = os.clock()
+    if now - (_warpCooldown[player.UserId] or 0) < 3 then
+        return { success = false, error = "cooldown" }
+    end
+    local char = player.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart") :: BasePart?
+    if not (hrp and hrp:IsA("BasePart")) then
+        return { success = false, error = "no_character" }
+    end
+    _warpCooldown[player.UserId] = now
+
+    local origin = MiningReach.resolveOrigin(workspace)
+    local bs = Constants.BLOCK_SIZE_STUDS
+    -- Чуть внутрь слоя (+2), чтобы точно засчиталась его глубина.
+    local targetDepth = layer.depthStart + 2
+    local gridY = math.max(0, math.floor(targetDepth + origin.Y / bs + 0.5))
+
+    local pocket = miningEngine:clearPocket(player, 0, 0, gridY, 5, 1)
+    local agg = newDeltaAgg()
+    mergeDelta(agg, pocket)
+    flushDelta(player, agg)
+
+    -- Ставим в середину кармана: упадёт на пол кармана с пары блоков, без
+    -- удушья в породе и без бесконечного падения.
+    local landing = MiningReach.blockCenter(origin, 0, 0, gridY + 2)
+    hrp.CFrame = CFrame.new(landing + Vector3.new(0, bs * 0.5, 0))
+
+    return { success = true, layerId = layerId, depth = layer.depthStart }
 end)
 
 --[[
@@ -635,6 +878,8 @@ local function onPlayerAdded(player: Player)
     -- 3h. Цели: квесты + достижения.
     questManager:onProfileLoaded(player)
     achievementManager:loadUnlocked(player)
+    promoCodeManager:onProfileLoaded(player)
+    socialRewardManager:onProfileLoaded(player)
 
     -- 4. Полный snapshot блоков для начального состояния клиента
     sendBlocksSnapshot(player)
@@ -648,6 +893,18 @@ local function onPlayerAdded(player: Player)
         if player.Parent then
             sendBlocksSnapshot(player)
         end
+        -- Перестраиваем тег после каждого респавна (персонаж новый)
+        local d = profileManager:getData(player)
+        if d then
+            task.spawn(function()
+                playerTag:onCharacterAdded(player, d)
+            end)
+        end
+    end)
+
+    -- Первый тег (персонаж уже существует при join)
+    task.spawn(function()
+        playerTag:onCharacterAdded(player, playerData)
     end)
 
     -- 5. Отправляем данные на HUD
@@ -666,9 +923,11 @@ local function onPlayerAdded(player: Player)
     end)
 
     log:info("Player initialized:", player.UserId)
+    runStudioMineEntryTest(player, playerData)
 end
 
 local function onPlayerRemoving(player: Player)
+    playerTag:onPlayerRemoving(player)
     log:info("Player left:", player.UserId)
     local data = profileManager:getData(player)
     if data then

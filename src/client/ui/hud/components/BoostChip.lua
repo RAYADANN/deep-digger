@@ -22,10 +22,13 @@ local Fusion = require(ReplicatedStorage:WaitForChild("Packages").Fusion)
 local ScopeFactory = require(script.Parent.Parent.ScopeFactory)
 local HudStateModule = require(script.Parent.Parent.HudState)
 local theme = require(script.Parent.Parent.theme)
+local UiAssets = require(ReplicatedStorage:WaitForChild("shared").data.UiAssets)
+local ViewportLayout = require(script.Parent.Parent.Parent.util.ViewportLayout)
 
 local Children = Fusion.Children
 local peek = Fusion.peek
 local C = theme.C
+local ICON = theme.ICON
 
 local BoostChip = {}
 
@@ -126,32 +129,46 @@ function BoostChip.create(s: ScopeFactory.HudScope, state: HudStateModule.HudSta
         return b ~= nil and (use(localRemaining) or 0) > 0
     end)
 
+    -- Десктоп: масштабируем чип через chromeMult. Phone/tablet = ×1.
+    local cm = ViewportLayout.chromeMult()
+    local function d(n: number): number
+        return math.max(1, math.floor(n * cm + 0.5))
+    end
+
     local chipFrame = s:New("Frame")({
         Name = "BoostChip",
-        Size = UDim2.new(0, 108, 0, 24),
-        Position = position or UDim2.new(0, 0, 0, 110),
+        Size = UDim2.new(0, d(118), 0, d(24)),
+        Position = position or UDim2.new(0, 0, 0, ViewportLayout.px(110)),
         BackgroundColor3 = C.gemBg,
         BackgroundTransparency = 0.1,
         BorderSizePixel = 0,
         Visible = visible,
         [Children] = {
-            s:New("UICorner")({ CornerRadius = UDim.new(0, 5) }),
+            s:New("UICorner")({ CornerRadius = UDim.new(0, d(5)) }),
             s:New("UIStroke")({
                 Color = Color3.fromRGB(255, 200, 60),
-                Thickness = 1.2,
+                Thickness = math.max(1.2, d(1.2)),
                 Transparency = 0.3,
             }),
+            s:New("ImageLabel")({
+                Size = UDim2.fromOffset(d(14), d(14)),
+                Position = UDim2.new(0, d(4), 0.5, -d(7)),
+                BackgroundTransparency = 1,
+                Image = UiAssets.image("upg_speed"),
+                ImageColor3 = ICON.tint,
+                ScaleType = Enum.ScaleType.Fit,
+            }),
             s:New("TextLabel")({
-                Size = UDim2.new(1, -8, 1, 0),
-                Position = UDim2.new(0, 4, 0, 0),
+                Size = UDim2.new(1, -d(24), 1, 0),
+                Position = UDim2.new(0, d(20), 0, 0),
                 BackgroundTransparency = 1,
                 Text = s:Computed(function(use)
                     local b = use(primaryBoost)
                     if not b then return "" end
                     local mult = b.multiplier or 1
-                    return ("⚡ x%g · %s"):format(mult, fmtTime(use(localRemaining) or 0))
+                    return ("x%g · %s"):format(mult, fmtTime(use(localRemaining) or 0))
                 end),
-                TextSize = 12,
+                TextSize = d(12),
                 Font = Enum.Font.GothamBold,
                 TextColor3 = Color3.fromRGB(255, 215, 90),
                 TextXAlignment = Enum.TextXAlignment.Left,

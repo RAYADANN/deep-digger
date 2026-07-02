@@ -7,14 +7,19 @@
 -- чтобы сервер не шёл всю карту блоков по сети каждый удар.
 
 local shared = game:GetService("ReplicatedStorage"):WaitForChild("shared")
+local Workspace = game:GetService("Workspace")
 local Signal = require(shared.util.Signal)
 local Logger = require(shared.util.Logger)
 local Constants = require(shared.constants)
+local MiningReach = require(shared.util.MiningReach)
 local OreTypes = require(shared.types.OreTypes)
 local UpgradeLogic = require(shared.util.UpgradeLogic)
 -- Phase 11: эффекты петов (damageBoost / luckBoost / multiMine). Формулы —
 -- единый источник в PetLogic, здесь только применение к урону/шансам.
 local PetLogic = require(shared.util.PetLogic)
+-- P2.9: ролл мутации руды (единый источник в shared/util/MutationLogic).
+local MutationLogic = require(shared.util.MutationLogic)
+local PlayerBoosts = require(script.Parent.PlayerBoosts)
 
 local MiningEngine = {}
 MiningEngine.__index = MiningEngine
@@ -22,9 +27,9 @@ MiningEngine.__index = MiningEngine
 type OreDef = OreTypes.OreDef
 type PlayerData = OreTypes.PlayerData
 
-export type BlockSnap = { oreId: string, hp: number, maxHp: number }
+export type BlockSnap = { oreId: string, hp: number, maxHp: number, mutation: string? }
 export type BlockDelta = {
-    created: { { key: string, oreId: string, hp: number, maxHp: number } },
+    created: { { key: string, oreId: string, hp: number, maxHp: number, mutation: string? } },
     updated: { { key: string, hp: number } },
     removed: { string },
 }
@@ -65,7 +70,7 @@ local function buildDelta(snapshot: { [string]: any }, blocks: { [string]: any }
         local cur = blocks[k]
         if orig == false then
             if cur ~= nil then
-                table.insert(delta.created, { key = k, oreId = cur.oreId, hp = cur.hp, maxHp = cur.maxHp })
+                table.insert(delta.created, { key = k, oreId = cur.oreId, hp = cur.hp, maxHp = cur.maxHp, mutation = cur.mutation })
             end
         else
             if cur == nil then
@@ -73,7 +78,7 @@ local function buildDelta(snapshot: { [string]: any }, blocks: { [string]: any }
             elseif cur.oreId ~= orig.oreId or cur.maxHp ~= orig.maxHp then
                 -- сундук заменил обычный блок на той же клетке: client должен пересоздать part
                 table.insert(delta.removed, k)
-                table.insert(delta.created, { key = k, oreId = cur.oreId, hp = cur.hp, maxHp = cur.maxHp })
+                table.insert(delta.created, { key = k, oreId = cur.oreId, hp = cur.hp, maxHp = cur.maxHp, mutation = cur.mutation })
             elseif cur.hp ~= orig.hp then
                 table.insert(delta.updated, { key = k, hp = cur.hp })
             end
@@ -137,7 +142,8 @@ end
 
 function MiningEngine:_createBlock(x, z, y)
     local ore = self:_roll(self:_layer(y))
-    return { oreId = ore.id, hp = ore.hp, maxHp = ore.hp, depth = y }
+    -- P2.9: маленький шанс что блок руды — мутировавший вариант. nil = обычный.
+    return { oreId = ore.id, hp = ore.hp, maxHp = ore.hp, depth = y, mutation = MutationLogic.roll() }
 end
 
 function MiningEngine:_ensure(userId, x, z, y)
@@ -179,6 +185,14 @@ function MiningEngine:_genSurface(userId)
     self._log:info("Surface generated for", userId)
 end
 
+function MiningEngine:hasSurfaceBlock(userId: number, gx: number, gz: number): boolean
+    local blocks = self._blocks[userId]
+    if not blocks then
+        return true
+    end
+    return blocks[key(gx, gz, 0)] ~= nil
+end
+
 --[[
     Блок считается «открытым» если:
       - имеет хотя бы одного air-соседа, либо
@@ -206,7 +220,7 @@ function MiningEngine:getVisibleBlocks(player, playerData)
     if not next(self._blocks[uid]) then self:_genSurface(uid) end
     local result = {}
     for k, block in pairs(self._blocks[uid]) do
-        table.insert(result, { key = k, oreId = block.oreId, hp = block.hp, maxHp = block.maxHp })
+        table.insert(result, { key = k, oreId = block.oreId, hp = block.hp, maxHp = block.maxHp, mutation = block.mutation })
     end
     return result
 end
@@ -224,6 +238,16 @@ function MiningEngine:hitBlock(player, playerData, x, z, y, isCrit: boolean?)
     local block = blocks[k]
     if not block then return { success = false, error = "Block not found" } end
 
+    local character = player.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    if root and root:IsA("BasePart") then
+        local origin = MiningReach.resolveOrigin(Workspace)
+        local center = MiningReach.blockCenter(origin, x, z, y)
+        if not MiningReach.isWithinReach((root :: BasePart).Position, center) then
+            return { success = false, error = "Too far" }
+        end
+    end
+
     if not self:_isExposed(uid, x, z, y) then
         return { success = false, error = "Block not exposed" }
     end
@@ -237,6 +261,7 @@ function MiningEngine:hitBlock(player, playerData, x, z, y, isCrit: boolean?)
     -- Phase 11: damageBoost экипированных петов (1 + Σ damageBoost).
     -- Применяется ПОСЛЕ крита — пет усиливает и обычный, и крит-удар.
     dmg *= PetLogic.damageMultiplier(playerData)
+    dmg *= PlayerBoosts.totalMultiplier(playerData.activeBoosts, "damage")
 
     local blockLayer = self:_layer(block.depth)
     local weakPickaxe = false
@@ -273,6 +298,7 @@ function MiningEngine:hitBlock(player, playerData, x, z, y, isCrit: boolean?)
     -- Phase 11: luckBoost петов умножает шанс скрытой комнаты.
     local roomChance = (Constants.SHAFT_BASE_CHANCE + block.depth * Constants.SHAFT_DEPTH_BONUS)
         * PetLogic.luckMultiplier(playerData)
+        * PlayerBoosts.totalMultiplier(playerData.activeBoosts, "luck")
     if oreDef and math.random() <= roomChance then
         roomGenerated = true
         local steps = 4 + math.random(0, 6)
@@ -323,6 +349,8 @@ function MiningEngine:hitBlock(player, playerData, x, z, y, isCrit: boolean?)
         success = true, mined = true, oreDef = oreDef, damage = dmg, crit = isCrit,
         roomGenerated = roomGenerated, roomRarity = roomRarity, weakPickaxe = weakPickaxe,
         bonusOreDefs = bonusOreDefs,
+        -- P2.9: мутация сломанного блока (или nil) — сервер начислит бонус.
+        mutation = block.mutation,
         blockDelta = buildDelta(snapshot, blocks),
     }
 end
@@ -352,6 +380,44 @@ function MiningEngine:_multiMineBreak(uid, x, z, y, snapshot)
         end
     end
     return nil
+end
+
+--[[
+    P2.10 (Depth shortcut): прорубает воздушный карман вокруг колонки (cx,cz)
+    от глубины topY вниз на `height` блоков, шириной (2*half+1). Стены вокруг
+    кармана догенерируются (_revealNeighbors) — игрок приземляется в карете,
+    а не в сплошной породе и не в пустоте без стен. Возвращает BlockDelta для
+    отправки клиенту (созданные стены + удалённые блоки кармана).
+]]
+function MiningEngine:clearPocket(player, cx: number, cz: number, topY: number, height: number?, half: number?): BlockDelta
+    local uid = player.UserId
+    if not self._blocks[uid] then self._blocks[uid] = {}; self._air[uid] = {} end
+    local blocks, air = self._blocks[uid], self._air[uid]
+    local h = math.max(1, math.floor(height or 5))
+    local hf = math.max(0, math.floor(half or 1))
+    local snapshot: { [string]: any } = {}
+    local cleared: { { x: number, z: number, y: number } } = {}
+    for dy = 0, h - 1 do
+        local y = topY + dy
+        if y >= 0 then
+            for dx = -hf, hf do
+                for dz = -hf, hf do
+                    local k = key(cx + dx, cz + dz, y)
+                    trackKey(snapshot, blocks, k)
+                    if blocks[k] then
+                        blocks[k] = nil
+                    end
+                    air[k] = true
+                    table.insert(cleared, { x = cx + dx, z = cz + dz, y = y })
+                end
+            end
+        end
+    end
+    -- Догенерируем стены вокруг кармана, чтобы он выглядел вырубленной комнатой.
+    for _, c in ipairs(cleared) do
+        self:_revealNeighbors(uid, c.x, c.z, c.y, snapshot)
+    end
+    return buildDelta(snapshot, blocks)
 end
 
 function MiningEngine:resetPlayer(player)

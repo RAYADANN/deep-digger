@@ -149,7 +149,12 @@ export type PlayerData = {
     discoveredMilestones: { [string]: boolean },
     claimedQuests: { [string]: boolean },
     unlockedAchievements: { [string]: boolean },
+    equippedTitleId: string?,
     shaftRoomCount: number,
+    redeemedCodes: { [string]: boolean },
+    socialRewardClaimed: boolean,
+    socialRewardPromptSeen: boolean,
+    socialFavoriteConfirmed: boolean,
 }
 
 export type UpgradeDef = {

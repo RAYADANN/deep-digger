@@ -29,7 +29,16 @@ local OnEvent = Fusion.OnEvent
 local Children = Fusion.Children
 
 local theme = require(script.Parent.Parent.theme)
+local PanelScale = require(script.Parent.Parent.PanelScale)
+local ViewportLayout = require(script.Parent.Parent.Parent.util.ViewportLayout)
+local UiScreen = require(script.Parent.Parent.Parent.util.UiScreen)
+local UiIcon = require(script.Parent.Parent.components.UiIcon)
 local C = theme.C
+-- Геометрия НЕ удваивается: кнопки футера позиционируются от правого края под
+-- фактическую ширину модалки — ×2 их бы столкнуло. Текст уже ×2 через text() и
+-- помещается в sc-кнопки без обрезки.
+local sc = PanelScale.sc
+local text = PanelScale.text
 
 local MODAL_GUI_NAME = "DeepDigger_RebirthModal"
 local ANTI_MISCLICK_DELAY = 0.3
@@ -53,19 +62,7 @@ export type Handle = {
 
 local function ensureGui(): ScreenGui
     local pg = Players.LocalPlayer:WaitForChild("PlayerGui")
-    local gui = pg:FindFirstChild(MODAL_GUI_NAME)
-    if gui then
-        return gui :: ScreenGui
-    end
-    local newGui = Instance.new("ScreenGui")
-    newGui.Name = MODAL_GUI_NAME
-    newGui.ResetOnSpawn = false
-    newGui.IgnoreGuiInset = true
-    -- DisplayOrder выше HUD (20) и tooltip (90), ниже Notifications (100) —
-    -- модал должен быть поверх HUD, но тосты «REBIRTH!» — поверх модала.
-    newGui.DisplayOrder = 95
-    newGui.Parent = pg
-    return newGui
+    return UiScreen.ensure(pg, MODAL_GUI_NAME, "modal")
 end
 
 function RebirthConfirmModal.show(opts: Options): Handle
@@ -85,6 +82,7 @@ function RebirthConfirmModal.show(opts: Options): Handle
 
     local handle: any = { _closed = false }
     local escConn: RBXScriptConnection? = nil
+    local layoutCleanup: (() -> ())? = nil
 
     local backdrop: Frame
 
@@ -96,6 +94,10 @@ function RebirthConfirmModal.show(opts: Options): Handle
         if escConn then
             escConn:Disconnect()
             escConn = nil
+        end
+        if layoutCleanup then
+            layoutCleanup()
+            layoutCleanup = nil
         end
         if backdrop then
             -- Fade-out, потом destroy.
@@ -119,12 +121,27 @@ function RebirthConfirmModal.show(opts: Options): Handle
 
     local confirmText = opts.confirmText or "РЕБЁРТ"
     local cancelText = opts.cancelText or "ОТМЕНА"
+    local REBIRTH_MODAL_W = 420
+    local REBIRTH_MODAL_H = 280
+    local layoutEpoch = s:Value(0)
+    layoutCleanup = ViewportLayout.subscribe(function()
+        layoutEpoch:set(Fusion.peek(layoutEpoch) + 1)
+    end)
+    local modalSize = s:Computed(function(use)
+        use(layoutEpoch)
+        local w, h = ViewportLayout.modalPixels(REBIRTH_MODAL_W, REBIRTH_MODAL_H)
+        return UDim2.fromOffset(w, h)
+    end)
+    local modalPos = s:Computed(function(use)
+        use(layoutEpoch)
+        local _, h = ViewportLayout.modalPixels(REBIRTH_MODAL_W, REBIRTH_MODAL_H)
+        return UDim2.new(0.5, 0, 0, ViewportLayout.modalCenterY(h))
+    end)
 
     backdrop = s:New("Frame")({
         Name = "Backdrop",
         Size = UDim2.fromScale(1, 1),
-        BackgroundColor3 = Color3.fromRGB(0, 0, 0),
-        BackgroundTransparency = 0.45,
+        BackgroundTransparency = 1,
         BorderSizePixel = 0,
         Parent = gui,
         Active = true,
@@ -140,8 +157,8 @@ function RebirthConfirmModal.show(opts: Options): Handle
             }),
             s:New("Frame")({
                 Name = "Modal",
-                Size = UDim2.fromOffset(420, 280),
-                Position = UDim2.fromScale(0.5, 0.5),
+                Size = modalSize,
+                Position = modalPos,
                 AnchorPoint = Vector2.new(0.5, 0.5),
                 BackgroundColor3 = C.panelBg,
                 BorderSizePixel = 0,
@@ -152,26 +169,26 @@ function RebirthConfirmModal.show(opts: Options): Handle
                 -- модал, обходя anti-misclick задержку.
                 Active = true,
                 [Children] = {
-                    s:New("UICorner")({ CornerRadius = UDim.new(0, 12) }),
-                    s:New("UIStroke")({ Color = C.gold, Thickness = 2, Transparency = 0.1 }),
+                    s:New("UICorner")({ CornerRadius = UDim.new(0, sc(12)) }),
+                    s:New("UIStroke")({ Color = C.gold, Thickness = sc(2), Transparency = 0.1 }),
                     -- Header (заголовок) с золотым акцентом.
-                    s:New("TextLabel")({
-                        Size = UDim2.new(1, -32, 0, 36),
-                        Position = UDim2.new(0, 16, 0, 12),
-                        BackgroundTransparency = 1,
-                        Text = "💠 " .. opts.title,
-                        TextSize = 22,
-                        Font = Enum.Font.GothamBlack,
-                        TextColor3 = C.gold,
-                        TextXAlignment = Enum.TextXAlignment.Left,
+                    UiIcon.titleRow(s, {
+                        source = "tab_rebirth",
+                        text = opts.title,
+                        textSize = sc(22),
+                        font = Enum.Font.GothamBlack,
+                        textColor = C.gold,
+                        size = UDim2.new(1, -sc(32), 0, sc(36)),
+                        position = UDim2.new(0, sc(16), 0, sc(12)),
+                        iconSize = sc(24),
                     }),
                     -- Body (RichText) — «Что сохранится / сбросится / следующий бонус».
                     s:New("TextLabel")({
-                        Size = UDim2.new(1, -32, 1, -140),
-                        Position = UDim2.new(0, 16, 0, 56),
+                        Size = UDim2.new(1, -sc(32), 1, -sc(140)),
+                        Position = UDim2.new(0, sc(16), 0, sc(56)),
                         BackgroundTransparency = 1,
                         Text = opts.body,
-                        TextSize = 14,
+                        TextSize = text(14),
                         Font = Enum.Font.Gotham,
                         TextColor3 = C.textMain,
                         TextXAlignment = Enum.TextXAlignment.Left,
@@ -182,20 +199,20 @@ function RebirthConfirmModal.show(opts: Options): Handle
                     -- Cancel button.
                     s:New("TextButton")({
                         Name = "CancelButton",
-                        Size = UDim2.new(0, 130, 0, 44),
-                        Position = UDim2.new(0, 16, 1, -60),
+                        Size = UDim2.new(0, sc(130), 0, sc(44)),
+                        Position = UDim2.new(0, sc(16), 1, -sc(60)),
                         BackgroundColor3 = s:Computed(function(use)
                             return use(hoveredCancel) and C.btnHover or C.btnBg
                         end),
                         BorderSizePixel = 0,
                         Text = cancelText,
-                        TextSize = 15,
+                        TextSize = text(15),
                         Font = Enum.Font.GothamBold,
                         TextColor3 = C.textMain,
                         AutoButtonColor = false,
                         [Children] = {
-                            s:New("UICorner")({ CornerRadius = UDim.new(0, 8) }),
-                            s:New("UIStroke")({ Color = C.btnBorder, Thickness = 1.5, Transparency = 0.4 }),
+                            s:New("UICorner")({ CornerRadius = UDim.new(0, sc(8)) }),
+                            s:New("UIStroke")({ Color = C.btnBorder, Thickness = sc(1.5), Transparency = 0.4 }),
                         },
                         [OnEvent("MouseEnter")] = function() hoveredCancel:set(true) end,
                         [OnEvent("MouseLeave")] = function() hoveredCancel:set(false) end,
@@ -204,8 +221,8 @@ function RebirthConfirmModal.show(opts: Options): Handle
                     -- Confirm button — disabled первые 0.3с (anti-misclick).
                     s:New("TextButton")({
                         Name = "ConfirmButton",
-                        Size = UDim2.new(0, 240, 0, 44),
-                        Position = UDim2.new(1, -256, 1, -60),
+                        Size = UDim2.new(0, sc(240), 0, sc(44)),
+                        Position = UDim2.new(1, -sc(256), 1, -sc(60)),
                         BackgroundColor3 = s:Computed(function(use)
                             if not use(enabled) then
                                 return C.btnDisabled
@@ -219,19 +236,19 @@ function RebirthConfirmModal.show(opts: Options): Handle
                             end
                             return confirmText
                         end),
-                        TextSize = 16,
+                        TextSize = text(16),
                         Font = Enum.Font.GothamBlack,
                         TextColor3 = s:Computed(function(use)
                             return if use(enabled) then Color3.fromRGB(40, 25, 0) else C.textMuted
                         end),
                         AutoButtonColor = false,
                         [Children] = {
-                            s:New("UICorner")({ CornerRadius = UDim.new(0, 8) }),
+                            s:New("UICorner")({ CornerRadius = UDim.new(0, sc(8)) }),
                             s:New("UIStroke")({
                                 Color = s:Computed(function(use)
                                     return use(enabled) and Color3.fromRGB(255, 240, 150) or C.btnBorder
                                 end),
-                                Thickness = 2,
+                                Thickness = sc(2),
                                 Transparency = 0.2,
                             }),
                         },
@@ -257,14 +274,9 @@ function RebirthConfirmModal.show(opts: Options): Handle
         },
     })
 
-    -- Fade-in backdrop'a.
     backdrop.BackgroundTransparency = 1
-    TweenService:Create(backdrop, TweenInfo.new(FADE_IN, Enum.EasingStyle.Quad), {
-        BackgroundTransparency = 0.45,
-    }):Play()
 
-    -- Anti-misclick: 0.3с задержка перед активацией [РЕБЁРТ]. Это и время на
-    -- прочтение тела модала.
+    -- Anti-misclick:
     task.delay(ANTI_MISCLICK_DELAY, function()
         if not handle._closed then
             enabled:set(true)

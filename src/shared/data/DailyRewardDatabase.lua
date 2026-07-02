@@ -68,11 +68,11 @@ end
 -- отдельный модуль когда добавим pets/eggs, сейчас inline.
 function module.iconFor(reward: DailyReward): string
     if reward.type == "coins" then
-        return "💰"
+        return "coin"
     elseif reward.type == "boost" then
-        return "⚡"
+        return "upg_speed"
     end
-    return "🎁"
+    return "icon_gift"
 end
 
 return module

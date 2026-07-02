@@ -6,9 +6,11 @@
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local shared = ReplicatedStorage:WaitForChild("shared")
+local modules = ReplicatedStorage:WaitForChild("Packages")
 local Signal = require(shared.util.Signal)
 local Logger = require(shared.util.Logger)
 local DiscoveryLogic = require(shared.util.DiscoveryLogic)
+local Net = require(modules.Net)
 
 local AchievementManager = {}
 AchievementManager.__index = AchievementManager
@@ -37,6 +39,11 @@ function AchievementManager.new(deps: Deps?)
     self._onProfileChanged = deps and deps.onProfileChanged
     self._notify = deps and deps.notify
     self._achievements = self:_buildList()
+
+    Net:Handle("EquipTitle", function(player: Player, titleId: string?)
+        return self:_handleEquipTitle(player, titleId)
+    end)
+
     self._log:info("AchievementManager initialized")
     return self
 end
@@ -47,7 +54,7 @@ function AchievementManager:_buildList(): { Achievement }
             id = "first_ore",
             name = "First Dig",
             description = "Mine your first ore",
-            icon = "⛏",
+            icon = "upg_pickaxe",
             reward = { coins = 100 },
             check = function(data) return (data.totalBlocksMined or 0) >= 1 end,
         },
@@ -55,7 +62,7 @@ function AchievementManager:_buildList(): { Achievement }
             id = "deep_100",
             name = "Getting Deeper",
             description = "Reach 100 meters depth",
-            icon = "⬇",
+            icon = "depth",
             reward = { coins = 500 },
             check = function(data) return (data.maxDepthReached or 0) >= 100 end,
         },
@@ -63,7 +70,7 @@ function AchievementManager:_buildList(): { Achievement }
             id = "deep_500",
             name = "Deep Diver",
             description = "Reach 500 meters depth",
-            icon = "🕳",
+            icon = "depth",
             reward = { coins = 2500, gems = 50 },
             check = function(data) return (data.maxDepthReached or 0) >= 500 end,
         },
@@ -71,7 +78,7 @@ function AchievementManager:_buildList(): { Achievement }
             id = "collector_10",
             name = "Collector",
             description = "Discover 10 unique ore types",
-            icon = "📦",
+            icon = "tab_inventory",
             reward = { coins = 1000 },
             check = function(data)
                 return DiscoveryLogic.totalProgress(data).found >= 10
@@ -81,7 +88,7 @@ function AchievementManager:_buildList(): { Achievement }
             id = "boss_slayer",
             name = "Boss Slayer",
             description = "Defeat your first boss",
-            icon = "👹",
+            icon = "icon_boss",
             reward = { coins = 5000, gems = 100 },
             check = function(data) return (data.bossesDefeated or 0) >= 1 end,
             hidden = true,
@@ -90,7 +97,7 @@ function AchievementManager:_buildList(): { Achievement }
             id = "millionaire",
             name = "Millionaire",
             description = "Earn 1,000,000 coins total",
-            icon = "💰",
+            icon = "coin",
             reward = { aura = "rainbow" },
             check = function(data) return (data.totalCoinsEarned or 0) >= 1000000 end,
         },
@@ -98,7 +105,7 @@ function AchievementManager:_buildList(): { Achievement }
             id = "shaft_finder",
             name = "Shaft Explorer",
             description = "Find 10 hidden rooms",
-            icon = "✨",
+            icon = "icon_sparkle",
             reward = { gems = 200 },
             check = function(data) return (data.shaftRoomCount or 0) >= 10 end,
         },
@@ -132,6 +139,9 @@ local function ensureFields(data: any)
     if typeof(data.unlockedAchievements) ~= "table" then
         data.unlockedAchievements = {}
     end
+    if data.equippedTitleId ~= nil and typeof(data.equippedTitleId) ~= "string" then
+        data.equippedTitleId = nil
+    end
 end
 
 function AchievementManager:isUnlocked(data: any, achievementId: string): boolean
@@ -145,7 +155,50 @@ function AchievementManager:loadUnlocked(player: Player)
     local data = if self._profileManager then self._profileManager:getData(player) else nil
     if data then
         ensureFields(data)
+        self:_sanitizeEquippedTitle(data)
     end
+end
+
+function AchievementManager:_sanitizeEquippedTitle(data: any)
+    local eq = data.equippedTitleId
+    if typeof(eq) ~= "string" or eq == "" then
+        data.equippedTitleId = nil
+        return
+    end
+    if not self:isUnlocked(data, eq) or not self:getById(eq) then
+        data.equippedTitleId = nil
+    end
+end
+
+function AchievementManager:_handleEquipTitle(player: Player, titleId: string?)
+    local data = if self._profileManager then self._profileManager:getData(player) else nil
+    if not data then
+        return { success = false, error = "no_profile" }
+    end
+    ensureFields(data)
+
+    if titleId == nil or titleId == "" then
+        data.equippedTitleId = nil
+        if self._onProfileChanged then
+            self._onProfileChanged(player)
+        end
+        return { success = true, equippedTitleId = nil }
+    end
+    if typeof(titleId) ~= "string" then
+        return { success = false, error = "bad_title", message = "Неверный титул" }
+    end
+    if not self:isUnlocked(data, titleId) then
+        return { success = false, error = "locked", message = "Достижение ещё не открыто" }
+    end
+    if not self:getById(titleId) then
+        return { success = false, error = "unknown", message = "Титул не найден" }
+    end
+
+    data.equippedTitleId = titleId
+    if self._onProfileChanged then
+        self._onProfileChanged(player)
+    end
+    return { success = true, equippedTitleId = titleId }
 end
 
 function AchievementManager:check(player: Player, playerData: any): boolean
@@ -170,7 +223,7 @@ function AchievementManager:check(player: Player, playerData: any): boolean
 
                 if self._notify then
                     self._notify(player, {
-                        text = ("🏅 Достижение: %s!"):format(achievement.name),
+                        text = ("Достижение: %s!"):format(achievement.name),
                         icon = achievement.icon,
                         color = { r = 255, g = 210, b = 50 },
                         duration = 4,

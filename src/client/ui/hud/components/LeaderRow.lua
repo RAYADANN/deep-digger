@@ -19,10 +19,15 @@ local Fusion = require(ReplicatedStorage:WaitForChild("Packages").Fusion)
 
 local ScopeFactory = require(script.Parent.Parent.ScopeFactory)
 local theme = require(script.Parent.Parent.theme)
+local PanelScale = require(script.Parent.Parent.PanelScale)
 local LeaderboardLogic = require(ReplicatedStorage:WaitForChild("shared").util.LeaderboardLogic)
+local UiAssets = require(ReplicatedStorage:WaitForChild("shared").data.UiAssets)
 
 local Children = Fusion.Children
 local C = theme.C
+-- Десктоп: геометрия ×2 синхронно с ×2 текстом (gsc). Phone/tablet без изменений.
+local sc = PanelScale.gsc
+local text = PanelScale.text
 
 -- Кэш `userId → asset content URL` для avatar'ов. GetUserThumbnailAsync —
 -- rate-limited (~50 req/min/server), повторять для каждого refresh'a
@@ -87,44 +92,59 @@ function LeaderRow.create(s: ScopeFactory.HudScope, props: Props)
         if not ok then return end
     end)
 
-    local crown = LeaderboardLogic.crownForRank(entry.rank)
-    local nameText = if crown then crown .. " " .. entry.name else entry.name
+    local nameText = entry.name
+    local showCrown = entry.rank == 1
 
     return s:New("Frame")({
         Name = "LeaderRow_" .. tostring(entry.rank),
-        Size = UDim2.new(1, -8, 0, 44),
+        Size = UDim2.new(1, -sc(8), 0, sc(44)),
         BackgroundColor3 = if isLocal then C.goldBg else C.btnBg,
         BackgroundTransparency = 0.1,
         BorderSizePixel = 0,
         [Children] = {
-            s:New("UICorner")({ CornerRadius = UDim.new(0, 6) }),
+            s:New("UICorner")({ CornerRadius = UDim.new(0, sc(6)) }),
             s:New("UIStroke")({
                 Color = if isLocal then C.gold else C.btnBorder,
-                Thickness = if isLocal then 1.8 else 1,
+                Thickness = if isLocal then sc(1.8) else sc(1),
                 Transparency = 0.4,
             }),
             -- Rank.
-            s:New("TextLabel")({
-                Size = UDim2.new(0, 44, 1, 0),
-                Position = UDim2.new(0, 4, 0, 0),
+            s:New("Frame")({
+                Size = UDim2.new(0, sc(44), 1, 0),
+                Position = UDim2.new(0, sc(4), 0, 0),
                 BackgroundTransparency = 1,
-                Text = LeaderboardLogic.formatRank(entry.rank),
-                TextSize = 14,
-                Font = Enum.Font.GothamBold,
-                TextColor3 = if entry.rank <= 3 then C.gold else C.textMuted,
-                TextXAlignment = Enum.TextXAlignment.Center,
+                [Children] = {
+                    if showCrown
+                        then s:New("ImageLabel")({
+                            Size = UDim2.fromOffset(sc(16), sc(16)),
+                            Position = UDim2.new(0.5, -sc(8), 0.5, -sc(16)),
+                            BackgroundTransparency = 1,
+                            Image = UiAssets.image("icon_crown"),
+                            ScaleType = Enum.ScaleType.Fit,
+                        })
+                        else nil,
+                    s:New("TextLabel")({
+                        Size = UDim2.fromScale(1, 1),
+                        BackgroundTransparency = 1,
+                        Text = LeaderboardLogic.formatRank(entry.rank),
+                        TextSize = text(14),
+                        Font = Enum.Font.GothamBold,
+                        TextColor3 = if entry.rank <= 3 then C.gold else C.textMuted,
+                        TextXAlignment = Enum.TextXAlignment.Center,
+                    }),
+                },
             }),
             -- Avatar (32x32 круг).
             s:New("Frame")({
-                Size = UDim2.fromOffset(32, 32),
-                Position = UDim2.new(0, 52, 0.5, -16),
+                Size = UDim2.fromOffset(sc(32), sc(32)),
+                Position = UDim2.new(0, sc(52), 0.5, -sc(16)),
                 BackgroundColor3 = Color3.fromRGB(40, 40, 60),
                 BorderSizePixel = 0,
                 [Children] = {
                     s:New("UICorner")({ CornerRadius = UDim.new(1, 0) }),
                     s:New("UIStroke")({
-                        Color = if isLocal then C.gold else C.tabBorder,
-                        Thickness = 1.2,
+                        Color = if isLocal then C.gold else C.dockBorder,
+                        Thickness = sc(theme.STROKE.thin),
                         Transparency = 0.5,
                     }),
                     s:New("ImageLabel")({
@@ -143,11 +163,11 @@ function LeaderRow.create(s: ScopeFactory.HudScope, props: Props)
             }),
             -- Name.
             s:New("TextLabel")({
-                Size = UDim2.new(1, -160, 1, 0),
-                Position = UDim2.new(0, 92, 0, 0),
+                Size = UDim2.new(1, -sc(160), 1, 0),
+                Position = UDim2.new(0, sc(92), 0, 0),
                 BackgroundTransparency = 1,
                 Text = nameText,
-                TextSize = 13,
+                TextSize = text(14),
                 Font = if isLocal then Enum.Font.GothamBlack else Enum.Font.GothamBold,
                 TextColor3 = if isLocal then C.gold else C.textMain,
                 TextXAlignment = Enum.TextXAlignment.Left,
@@ -155,11 +175,11 @@ function LeaderRow.create(s: ScopeFactory.HudScope, props: Props)
             }),
             -- Value.
             s:New("TextLabel")({
-                Size = UDim2.new(0, 100, 1, 0),
-                Position = UDim2.new(1, -108, 0, 0),
+                Size = UDim2.new(0, sc(100), 1, 0),
+                Position = UDim2.new(1, -sc(108), 0, 0),
                 BackgroundTransparency = 1,
                 Text = LeaderboardLogic.formatValue(props.boardId :: any, entry.value),
-                TextSize = 14,
+                TextSize = text(14),
                 Font = Enum.Font.GothamBlack,
                 TextColor3 = C.gold,
                 TextXAlignment = Enum.TextXAlignment.Right,

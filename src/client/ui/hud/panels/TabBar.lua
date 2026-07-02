@@ -26,21 +26,21 @@ function TabBar.create(s: ScopeFactory.HudScope, state: HudStateModule.HudState)
                 VerticalAlignment = Enum.VerticalAlignment.Center,
             }),
             TabBtn.create(s, {
-                icon = "⛏",
+                icon = "tab_inventory",
                 label = "ИНВЕНТ",
                 tabId = "inventory",
                 activeTab = state.activeTab,
                 panelOpen = state.panelOpen,
             }),
             TabBtn.create(s, {
-                icon = "⚒",
+                icon = "tab_upgrades",
                 label = "АПГРЕЙД",
                 tabId = "upgrades",
                 activeTab = state.activeTab,
                 panelOpen = state.panelOpen,
             }),
             TabBtn.create(s, {
-                icon = "📊",
+                icon = "tab_stats",
                 label = "СТАТЫ",
                 tabId = "stats",
                 activeTab = state.activeTab,
@@ -50,7 +50,7 @@ function TabBar.create(s: ScopeFactory.HudScope, state: HudStateModule.HudState)
             -- конвенции Phase 8 — на случай если Tutorial.lua вырастит
             -- 4-й шаг «попробуй ребёрт» в будущем.
             TabBtn.create(s, {
-                icon = "💠",
+                icon = "tab_rebirth",
                 label = "РЕБЁРТ",
                 tabId = "rebirth",
                 activeTab = state.activeTab,
@@ -60,7 +60,7 @@ function TabBar.create(s: ScopeFactory.HudScope, state: HudStateModule.HudState)
             -- TabBar в MVP-scope. Tab_leaderboard используется
             -- LeaderboardPanel.create как activeTab filter.
             TabBtn.create(s, {
-                icon = "🏆",
+                icon = "tab_leaderboard",
                 label = "ЛИДЕРЫ",
                 tabId = "leaderboard",
                 activeTab = state.activeTab,
@@ -69,7 +69,7 @@ function TabBar.create(s: ScopeFactory.HudScope, state: HudStateModule.HudState)
             -- Phase 11: pets. 6-й таб — жанро-определяющая механика.
             -- Tab_pets используется PetsPanel.create как activeTab filter.
             TabBtn.create(s, {
-                icon = "🐾",
+                icon = "tab_pets",
                 label = "ПИТОМЦЫ",
                 tabId = "pets",
                 activeTab = state.activeTab,
@@ -77,21 +77,21 @@ function TabBar.create(s: ScopeFactory.HudScope, state: HudStateModule.HudState)
             }),
             -- Phase 12: монетизация. Tab_shop — ShopPanel filter.
             TabBtn.create(s, {
-                icon = "🛒",
+                icon = "tab_shop",
                 label = "МАГАЗИН",
                 tabId = "shop",
                 activeTab = state.activeTab,
                 panelOpen = state.panelOpen,
             }),
             TabBtn.create(s, {
-                icon = "📖",
+                icon = "tab_journal",
                 label = "ЖУРНАЛ",
                 tabId = "journal",
                 activeTab = state.activeTab,
                 panelOpen = state.panelOpen,
             }),
             TabBtn.create(s, {
-                icon = "🎯",
+                icon = "tab_goals",
                 label = "ЦЕЛИ",
                 tabId = "goals",
                 activeTab = state.activeTab,

@@ -2,6 +2,7 @@
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Constants = require(ReplicatedStorage:WaitForChild("shared").constants)
+local RebirthLogic = require(ReplicatedStorage:WaitForChild("shared").util.RebirthLogic)
 local UpgradeMeta = require(script.Parent.UpgradeMeta)
 
 export type InventoryEntry = { oreId: string, count: number }
@@ -82,6 +83,7 @@ export type ServerPlayerPayload = {
     petEffects: PetEffectsPayload?,
     -- Phase 12: монетизация.
     gamepasses: { [string]: boolean }?,
+    shopPurchases: { [string]: boolean }?,
     equippedUids: { string }?,
     petMaxEquipped: number?,
     -- Phase 13: журнал находок.
@@ -92,6 +94,34 @@ export type ServerPlayerPayload = {
     questClaimedCount: number?,
     questTotalCount: number?,
     achievements: { AchievementPayload }?,
+    equippedTitleId: string?,
+    dailyQuests: DailyQuestsPayload?,
+    socialReward: SocialRewardPayload?,
+}
+
+export type SocialRewardPayload = {
+    claimed: boolean?,
+    promptSeen: boolean?,
+    favoriteConfirmed: boolean?,
+    inGroup: boolean?,
+    canClaim: boolean?,
+}
+
+export type DailyQuestEntry = {
+    id: string,
+    name: string,
+    desc: string,
+    metric: string,
+    target: number,
+    progress: number,
+    claimable: boolean,
+    claimed: boolean,
+    reward: { coins: number?, gems: number? },
+}
+
+export type DailyQuestsPayload = {
+    quests: { DailyQuestEntry },
+    secondsUntilReset: number,
 }
 
 export type QuestActivePayload = {
@@ -133,6 +163,7 @@ export type MappedPlayerData = {
     equippedPet: string?,
     petEffects: PetEffectsPayload,
     gamepasses: { [string]: boolean },
+    shopPurchases: { [string]: boolean },
     equippedUids: { string },
     petMaxEquipped: number,
     discoveredOres: { [string]: boolean },
@@ -142,6 +173,9 @@ export type MappedPlayerData = {
     questClaimedCount: number,
     questTotalCount: number,
     achievements: { AchievementPayload },
+    equippedTitleId: string?,
+    dailyQuests: DailyQuestsPayload,
+    socialReward: SocialRewardPayload,
 }
 
 local PlayerDataMapper = {}
@@ -254,7 +288,9 @@ function PlayerDataMapper.fromServer(payload: ServerPlayerPayload): MappedPlayer
     local placement = payload.leaderboardPlacement or DEFAULT_LEADERBOARD
     return {
         coins = payload.coins or 0,
-        gems = 0,
+        -- P1.6: гемы перестали быть «мёртвыми» — теперь это валюта Desert Egg
+        -- (PetsPanel). Раньше тут было жёстко 0 (валюта скрыта без сейва).
+        gems = payload.gems or 0,
         inventory = PlayerDataMapper.normalizeInventory(payload.inventory),
         upgrades = PlayerDataMapper.mapUpgrades(payload),
         totalBlocksMined = payload.totalBlocksMined or 0,
@@ -263,10 +299,9 @@ function PlayerDataMapper.fromServer(payload: ServerPlayerPayload): MappedPlayer
         maxDepthReached = payload.maxDepthReached or 0,
         tutorialStep = payload.tutorialStep or 0,
         rebirths = rebirths,
-        -- Если сервер не прислал — считаем от rebirths (1 + r*0.1). Это
-        -- последний рубеж: предыдущая Phase 8-совместимость + быстрый
-        -- фолбэк, если PlayerStats прилетит ДО Phase-9-апа.
-        rebirthMultiplier = payload.rebirthMultiplier or (1 + rebirths * 0.1),
+        -- Если сервер не прислал — считаем через RebirthLogic (P1.4:
+        -- мультипликативная кривая). Последний рубеж/фолбэк.
+        rebirthMultiplier = payload.rebirthMultiplier or RebirthLogic.valueMultiplier(rebirths),
         dailyState = {
             canClaim = daily.canClaim or false,
             currentStreak = daily.currentStreak or 0,
@@ -285,6 +320,7 @@ function PlayerDataMapper.fromServer(payload: ServerPlayerPayload): MappedPlayer
         equippedPet = payload.equippedPet,
         petEffects = payload.petEffects or DEFAULT_PET_EFFECTS,
         gamepasses = if typeof(payload.gamepasses) == "table" then payload.gamepasses else {},
+        shopPurchases = if typeof(payload.shopPurchases) == "table" then payload.shopPurchases else {},
         equippedUids = if typeof(payload.equippedUids) == "table" then payload.equippedUids else {},
         petMaxEquipped = payload.petMaxEquipped or 1,
         discoveredOres = if typeof(payload.discoveredOres) == "table" then payload.discoveredOres else {},
@@ -297,6 +333,19 @@ function PlayerDataMapper.fromServer(payload: ServerPlayerPayload): MappedPlayer
         questClaimedCount = payload.questClaimedCount or 0,
         questTotalCount = payload.questTotalCount or 0,
         achievements = if typeof(payload.achievements) == "table" then payload.achievements else {},
+        equippedTitleId = if typeof(payload.equippedTitleId) == "string" then payload.equippedTitleId else nil,
+        dailyQuests = if typeof(payload.dailyQuests) == "table"
+            then payload.dailyQuests
+            else { quests = {}, secondsUntilReset = 0 },
+        socialReward = if typeof(payload.socialReward) == "table"
+            then payload.socialReward
+            else {
+                claimed = false,
+                promptSeen = false,
+                favoriteConfirmed = false,
+                inGroup = false,
+                canClaim = false,
+            },
     }
 end
 

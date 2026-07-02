@@ -37,9 +37,12 @@ local Children = Fusion.Children
 local peek = Fusion.peek
 
 local DailyCard = require(script.Parent.hud.components.DailyCard)
+local UiIcon = require(script.Parent.hud.components.UiIcon)
 local theme = require(script.Parent.hud.theme)
 local Notification = require(script.Parent.Notification)
 local SoundManager = require(script.Parent.Parent.core.SoundManager)
+local ViewportLayout = require(script.Parent.util.ViewportLayout)
+local UiScreen = require(script.Parent.util.UiScreen)
 -- RewardFX дёргается через Net:Connect("Notify") в init.client.lua с
 -- kind="daily_reward" (server-side authority по rarity дня).
 
@@ -49,7 +52,6 @@ local MODAL_GUI_NAME = "DeepDigger_DailyModal"
 local ANTI_MISCLICK_DELAY = 0.4
 local FADE_IN = 0.18
 local FADE_OUT = 0.18
-local MOBILE_VIEWPORT_X = 800
 
 local DailyRewardModal = {}
 
@@ -72,24 +74,7 @@ local _activeHandle: any = nil
 local function ensureGui(): ScreenGui?
     local pg = Players.LocalPlayer and Players.LocalPlayer:FindFirstChildOfClass("PlayerGui")
     if not pg then return nil end
-    local existing = pg:FindFirstChild(MODAL_GUI_NAME)
-    if existing and existing:IsA("ScreenGui") then
-        return existing
-    end
-    local gui = Instance.new("ScreenGui")
-    gui.Name = MODAL_GUI_NAME
-    gui.ResetOnSpawn = false
-    gui.IgnoreGuiInset = true
-    -- DisplayOrder = 95 как RebirthConfirmModal (поверх HUD/таб'a, ниже notifications).
-    gui.DisplayOrder = 95
-    gui.Parent = pg
-    return gui
-end
-
-local function isMobile(): boolean
-    local camera = workspace.CurrentCamera
-    if not camera then return false end
-    return camera.ViewportSize.X < MOBILE_VIEWPORT_X
+    return UiScreen.ensure(pg, MODAL_GUI_NAME, "modal")
 end
 
 function DailyRewardModal.show(opts: Options): Handle?
@@ -162,7 +147,7 @@ function DailyRewardModal.show(opts: Options): Handle?
 
     -- Grid: ВЫНЕСЕНО в локальную функцию, чтобы переключиться desktop ↔ mobile
     -- по viewport.
-    local mobile = isMobile()
+    local mobile = ViewportLayout.isNarrow()
     local cols = mobile and 2 or 4
     local cardW = 100
     local cardH = 140
@@ -177,6 +162,29 @@ function DailyRewardModal.show(opts: Options): Handle?
     local padding = 20
     local modalW = gridW + padding * 2
     local modalH = headerH + gridH + footerH + padding * 2 + 12
+
+    -- Контент свёрстан в дизайн-пикселях (modalW × modalH) и целиком
+    -- ужимается через UIScale, поэтому никогда не обрезается на телефоне.
+    local layoutEpoch = s:Value(0)
+    ViewportLayout.subscribe(function()
+        layoutEpoch:set(peek(layoutEpoch) + 1)
+    end, s)
+    local fitScale = s:Computed(function(use)
+        use(layoutEpoch)
+        -- Десктоп: разрешаем окну (и всему тексту внутри UIScale) вырасти до 1.7×
+        -- дизайна — так подписи реально крупные. Потолок применяется только на
+        -- desktop; на phone/tablet fit-коэффициент < 1, поэтому maxScale не влияет.
+        local deskMax = if ViewportLayout.tier() == "desktop" then 1.7 else 1.0
+        return ViewportLayout.fitModalScale(modalW, modalH, deskMax)
+    end)
+    local modalSize = s:Computed(function(use)
+        local k = use(fitScale)
+        return UDim2.fromOffset(math.floor(modalW * k + 0.5), math.floor(modalH * k + 0.5))
+    end)
+    local modalPos = s:Computed(function(use)
+        local k = use(fitScale)
+        return UDim2.new(0.5, 0, 0, ViewportLayout.modalCenterY(math.floor(modalH * k + 0.5)))
+    end)
 
     -- Карточки собираем через s:Computed ВНУТРИ Grid (как InvSlot в
     -- InventoryPanel). Прежний вариант — create() в цикле до backdrop —
@@ -196,8 +204,7 @@ function DailyRewardModal.show(opts: Options): Handle?
     backdrop = s:New("Frame")({
         Name = "Backdrop",
         Size = UDim2.fromScale(1, 1),
-        BackgroundColor3 = Color3.fromRGB(0, 0, 0),
-        BackgroundTransparency = 0.4,
+        BackgroundTransparency = 1,
         BorderSizePixel = 0,
         Parent = gui,
         Active = true,
@@ -213,38 +220,61 @@ function DailyRewardModal.show(opts: Options): Handle?
             }),
             s:New("Frame")({
                 Name = "Modal",
-                Size = UDim2.fromOffset(modalW, modalH),
-                Position = UDim2.fromScale(0.5, 0.5),
+                Size = modalSize,
+                Position = modalPos,
                 AnchorPoint = Vector2.new(0.5, 0.5),
                 BackgroundColor3 = C.panelBg,
                 BorderSizePixel = 0,
                 Active = true,
+                ClipsDescendants = true,
                 ZIndex = 2,
                 [Children] = {
                     s:New("UICorner")({ CornerRadius = UDim.new(0, 14) }),
                     s:New("UIStroke")({ Color = C.gold, Thickness = 2, Transparency = 0.1 }),
+                    s:New("Frame")({
+                    Name = "Content",
+                    Size = UDim2.fromOffset(modalW, modalH),
+                    BackgroundTransparency = 1,
+                    BorderSizePixel = 0,
+                    ZIndex = 2,
+                    [Children] = {
+                    s:New("UIScale")({ Scale = fitScale }),
                     -- Header
-                    s:New("TextLabel")({
-                        Size = UDim2.new(1, -padding * 2, 0, 28),
-                        Position = UDim2.new(0, padding, 0, padding),
-                        BackgroundTransparency = 1,
-                        Text = "🎁 Награда за день",
-                        TextSize = 22,
-                        Font = Enum.Font.GothamBlack,
-                        TextColor3 = C.gold,
-                        TextXAlignment = Enum.TextXAlignment.Left,
-                        ZIndex = 5,
+                    UiIcon.titleRow(s, {
+                        source = "icon_gift",
+                        text = "Награда за день",
+                        textSize = 22,
+                        font = Enum.Font.GothamBlack,
+                        textColor = C.gold,
+                        size = UDim2.new(1, -padding * 2, 0, 28),
+                        position = UDim2.new(0, padding, 0, padding),
+                        iconSize = 24,
+                        zIndex = 5,
                     }),
-                    s:New("TextLabel")({
+                    s:New("Frame")({
                         Size = UDim2.new(1, -padding * 2, 0, 18),
                         Position = UDim2.new(0, padding, 0, padding + 32),
                         BackgroundTransparency = 1,
-                        Text = ("🔥 Стрик: %d дн.  ·  День %d из 7"):format(opts.streak or 0, nextDay),
-                        TextSize = 13,
-                        Font = Enum.Font.GothamBold,
-                        TextColor3 = C.textLabel,
-                        TextXAlignment = Enum.TextXAlignment.Left,
                         ZIndex = 5,
+                        [Children] = {
+                            UiIcon.create(s, {
+                                source = "icon_streak",
+                                size = UDim2.fromOffset(16, 16),
+                                position = UDim2.new(0, 0, 0.5, -8),
+                                zIndex = 5,
+                            }),
+                            s:New("TextLabel")({
+                                Size = UDim2.new(1, -22, 1, 0),
+                                Position = UDim2.new(0, 22, 0, 0),
+                                BackgroundTransparency = 1,
+                                Text = ("Стрик: %d дн.  ·  День %d из 7"):format(opts.streak or 0, nextDay),
+                                TextSize = 13,
+                                Font = Enum.Font.GothamBold,
+                                TextColor3 = C.textLabel,
+                                TextXAlignment = Enum.TextXAlignment.Left,
+                                ZIndex = 5,
+                            }),
+                        },
                     }),
                     -- Grid с карточками
                     s:New("Frame")({
@@ -300,7 +330,7 @@ function DailyRewardModal.show(opts: Options): Handle?
                         BorderSizePixel = 0,
                         Text = s:Computed(function(use)
                             if not use(enabled) then return "..." end
-                            return "🎁 ЗАБРАТЬ"
+                            return "ЗАБРАТЬ"
                         end),
                         TextSize = 17,
                         Font = Enum.Font.GothamBlack,
@@ -316,6 +346,13 @@ function DailyRewardModal.show(opts: Options): Handle?
                                 end),
                                 Thickness = 2,
                                 Transparency = 0.2,
+                            }),
+                            UiIcon.create(s, {
+                                source = "icon_gift",
+                                size = UDim2.fromOffset(18, 18),
+                                position = UDim2.new(0, 14, 0.5, -9),
+                                zIndex = 6,
+                                visible = enabled,
                             }),
                         },
                         [OnEvent("MouseEnter")] = function() hoveredClaim:set(true) end,
@@ -336,7 +373,7 @@ function DailyRewardModal.show(opts: Options): Handle?
                                     SoundManager.play("buy_fail")
                                     Notification.show({
                                         text = msg,
-                                        icon = "⚠",
+                                        icon = "icon_warning",
                                         color = Color3.fromRGB(255, 140, 60),
                                         duration = 3,
                                     })
@@ -362,25 +399,23 @@ function DailyRewardModal.show(opts: Options): Handle?
                             end)
                         end,
                     }),
+                    },
+                    }),
                 },
             }),
         },
     })
 
-    -- Fade-in backdrop'a.
     backdrop.BackgroundTransparency = 1
-    TweenService:Create(backdrop, TweenInfo.new(FADE_IN, Enum.EasingStyle.Quad), {
-        BackgroundTransparency = 0.4,
-    }):Play()
 
-    -- Pulse на текущей карточке — только после того как Fusion
+    -- Pulse на текущей карточке
     -- смонтировал дерево (нельзя GetDescendants на «сыром» s:New).
     task.defer(function()
         if handle._closed or not backdrop.Parent then
             return
         end
         local modal = backdrop:FindFirstChild("Modal")
-        local grid = modal and modal:FindFirstChild("Grid")
+        local grid = modal and modal:FindFirstChild("Grid", true)
         local card = grid and grid:FindFirstChild("DailyCard_" .. tostring(nextDay))
         if card then
             local stroke = card:FindFirstChildOfClass("UIStroke")

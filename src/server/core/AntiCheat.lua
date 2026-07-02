@@ -13,6 +13,7 @@ local Logger = require(shared.util.Logger)
 local Constants = require(shared.constants)
 local OreTypes = require(shared.types.OreTypes)
 local UpgradeLogic = require(shared.util.UpgradeLogic)
+local PlayerBoosts = require(script.Parent.PlayerBoosts)
 
 local AntiCheat = {}
 AntiCheat.__index = AntiCheat
@@ -95,7 +96,10 @@ end
 function AntiCheat:validateSwing(player: Player, playerData: OreTypes.PlayerData): boolean
     local userId = player.UserId
     local now = os.clock()
-    local minInterval = UpgradeLogic.swingDelaySeconds(playerData.speedLevel or 1)
+    local minInterval = UpgradeLogic.swingDelaySeconds(
+        playerData.speedLevel or 1,
+        PlayerBoosts.totalMultiplier(playerData.activeBoosts, "speed")
+    )
 
     local last = self._lastSwing[userId]
     if last and (now - last) < minInterval * 0.9 then

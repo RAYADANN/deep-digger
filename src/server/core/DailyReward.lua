@@ -154,7 +154,7 @@ function DailyReward:_notifyClaim(player: Player, reward: DailyRewardDatabase.Da
         return
     end
     self._notify(player, {
-        text = ("🎁 День %d: %s"):format(cycleDay, reward.label or "Награда забрана"),
+        text = ("День %d: %s"):format(cycleDay, reward.label or "Награда забрана"),
         icon = DailyRewardDatabase.iconFor(reward),
         color = rarityColor(reward.rarity or "common"),
         duration = 4,
@@ -188,8 +188,8 @@ function DailyReward:_notifyAvailable(player: Player, force: boolean?)
     self._availabilityNotified[player.UserId] = curr.yday
 
     self._notify(player, {
-        text = "🎁 Награда за день доступна!",
-        icon = "🎁",
+        text = "Награда за день доступна!",
+        icon = "icon_gift",
         color = GOLD,
         duration = 4.5,
         kind = "daily_available",

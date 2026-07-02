@@ -6,11 +6,17 @@ local Fusion = require(ReplicatedStorage:WaitForChild("Packages").Fusion)
 local ScopeFactory = require(script.Parent.Parent.ScopeFactory)
 local HudStateModule = require(script.Parent.Parent.HudState)
 local theme = require(script.Parent.Parent.theme)
+local PanelScale = require(script.Parent.Parent.PanelScale)
 local DiscoveryLogic = require(ReplicatedStorage:WaitForChild("shared").util.DiscoveryLogic)
 local OreEntry = require(script.Parent.Parent.components.OreEntry)
+local UiIcon = require(script.Parent.Parent.components.UiIcon)
+local UiAssets = require(ReplicatedStorage:WaitForChild("shared").data.UiAssets)
 
 local Children = Fusion.Children
 local C = theme.C
+-- Десктоп: геометрия ×2 синхронно с ×2 текстом (gsc). Phone/tablet без изменений.
+local sc = PanelScale.gsc
+local text = PanelScale.text
 
 local JournalPanel = {}
 
@@ -24,7 +30,7 @@ function JournalPanel.create(s: ScopeFactory.HudScope, state: HudStateModule.Hud
         Size = UDim2.new(1, 0, 1, 0),
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
-        ScrollBarThickness = 5,
+        ScrollBarThickness = PanelScale.scrollBar(),
         ScrollBarImageColor3 = C.panelBorder,
         CanvasSize = UDim2.new(0, 0, 0, 0),
         AutomaticCanvasSize = Enum.AutomaticSize.Y,
@@ -33,47 +39,47 @@ function JournalPanel.create(s: ScopeFactory.HudScope, state: HudStateModule.Hud
         end),
         [Children] = {
             s:New("UIPadding")({
-                PaddingTop = UDim.new(0, 4),
-                PaddingLeft = UDim.new(0, 4),
-                PaddingRight = UDim.new(0, 4),
-                PaddingBottom = UDim.new(0, 8),
+                PaddingTop = PanelScale.pad(4),
+                PaddingLeft = PanelScale.pad(4),
+                PaddingRight = PanelScale.pad(4),
+                PaddingBottom = PanelScale.pad(8),
             }),
             s:New("UIListLayout")({
                 FillDirection = Enum.FillDirection.Vertical,
-                Padding = UDim.new(0, 10),
+                Padding = PanelScale.pad(10),
                 SortOrder = Enum.SortOrder.LayoutOrder,
             }),
             s:New("Frame")({
                 Name = "JournalHeader",
-                Size = UDim2.new(1, 0, 0, 44),
+                Size = UDim2.new(1, 0, 0, sc(44)),
                 BackgroundColor3 = C.panelHeader,
                 BackgroundTransparency = 0.15,
                 BorderSizePixel = 0,
                 LayoutOrder = 0,
                 [Children] = {
-                    s:New("UICorner")({ CornerRadius = UDim.new(0, 8) }),
-                    s:New("UIStroke")({ Color = C.gem, Thickness = 1, Transparency = 0.5 }),
-                    s:New("TextLabel")({
-                        Size = UDim2.new(1, -12, 0, 20),
-                        Position = UDim2.new(0, 8, 0, 6),
-                        BackgroundTransparency = 1,
-                        Text = "📖 Журнал находок",
-                        TextSize = 14,
-                        Font = Enum.Font.GothamBlack,
-                        TextColor3 = C.textMain,
-                        TextXAlignment = Enum.TextXAlignment.Left,
-                        ZIndex = 2,
+                    s:New("UICorner")({ CornerRadius = UDim.new(0, sc(8)) }),
+                    s:New("UIStroke")({ Color = C.gem, Thickness = sc(1), Transparency = 0.5 }),
+                    UiIcon.titleRow(s, {
+                        source = "tab_journal",
+                        text = "Журнал находок",
+                        textSize = sc(14),
+                        font = Enum.Font.GothamBlack,
+                        textColor = C.textMain,
+                        size = UDim2.new(1, -sc(12), 0, sc(20)),
+                        position = UDim2.new(0, sc(8), 0, sc(6)),
+                        iconSize = sc(18),
+                        zIndex = 2,
                     }),
                     s:New("TextLabel")({
-                        Size = UDim2.new(1, -12, 0, 16),
-                        Position = UDim2.new(0, 8, 0, 24),
+                        Size = UDim2.new(1, -sc(12), 0, sc(16)),
+                        Position = UDim2.new(0, sc(8), 0, sc(24)),
                         BackgroundTransparency = 1,
                         Text = s:Computed(function(use)
                             local found = use(state.discoveryFound)
                             local total = use(state.discoveryTotal)
                             return ("Открыто %d / %d руд"):format(found, total)
                         end),
-                        TextSize = 12,
+                        TextSize = text(12),
                         Font = Enum.Font.GothamBold,
                         TextColor3 = C.gem,
                         TextXAlignment = Enum.TextXAlignment.Left,
@@ -101,37 +107,43 @@ function JournalPanel.create(s: ScopeFactory.HudScope, state: HudStateModule.Hud
                         [Children] = {
                             s:New("UIListLayout")({
                                 FillDirection = Enum.FillDirection.Vertical,
-                                Padding = UDim.new(0, 6),
+                                Padding = PanelScale.pad(6),
                             }),
                             s:New("Frame")({
-                                Size = UDim2.new(1, 0, 0, 28),
+                                Size = UDim2.new(1, 0, 0, sc(28)),
                                 BackgroundTransparency = 1,
                                 [Children] = {
                                     s:New("TextLabel")({
                                         Size = UDim2.new(0.72, 0, 1, 0),
                                         BackgroundTransparency = 1,
                                         Text = layer.name,
-                                        TextSize = 13,
+                                        TextSize = text(13),
                                         Font = Enum.Font.GothamBold,
                                         TextColor3 = C.textMain,
                                         TextXAlignment = Enum.TextXAlignment.Left,
                                         ZIndex = 2,
                                     }),
                                     s:New("TextLabel")({
-                                        Size = UDim2.new(0.28, 0, 1, 0),
+                                        Size = UDim2.new(0.22, 0, 1, 0),
                                         Position = UDim2.new(0.72, 0, 0, 0),
                                         BackgroundTransparency = 1,
-                                        Text = ("%d/%d%s"):format(
-                                            progress.found,
-                                            progress.total,
-                                            if complete and milestoneDone then " ✓" else ""
-                                        ),
-                                        TextSize = 12,
+                                        Text = ("%d/%d"):format(progress.found, progress.total),
+                                        TextSize = text(12),
                                         Font = Enum.Font.Gotham,
                                         TextColor3 = if complete then C.gem else C.textMuted,
                                         TextXAlignment = Enum.TextXAlignment.Right,
                                         ZIndex = 2,
                                     }),
+                                    if complete and milestoneDone
+                                        then s:New("ImageLabel")({
+                                            Size = UDim2.fromOffset(sc(14), sc(14)),
+                                            Position = UDim2.new(1, -sc(14), 0.5, -sc(7)),
+                                            BackgroundTransparency = 1,
+                                            Image = UiAssets.image("icon_check"),
+                                            ScaleType = Enum.ScaleType.Fit,
+                                            ZIndex = 2,
+                                        })
+                                        else nil,
                                 },
                             }),
                             s:New("Frame")({
@@ -140,8 +152,8 @@ function JournalPanel.create(s: ScopeFactory.HudScope, state: HudStateModule.Hud
                                 BackgroundTransparency = 1,
                                 [Children] = {
                                     s:New("UIGridLayout")({
-                                        CellSize = UDim2.new(0, 52, 0, 62),
-                                        CellPadding = UDim2.new(0, 6, 0, 6),
+                                        CellSize = UDim2.new(0, sc(52), 0, sc(62)),
+                                        CellPadding = UDim2.new(0, sc(6), 0, sc(6)),
                                         SortOrder = Enum.SortOrder.Name,
                                     }),
                                     (function()
@@ -164,7 +176,7 @@ function JournalPanel.create(s: ScopeFactory.HudScope, state: HudStateModule.Hud
                 return sections
             end),
             s:New("TextLabel")({
-                Size = UDim2.new(1, 0, 0, 36),
+                Size = UDim2.new(1, 0, 0, sc(36)),
                 BackgroundTransparency = 1,
                 Text = s:Computed(function(use)
                     local milestones = use(state.discoveredMilestones) :: { [string]: boolean }
@@ -173,11 +185,11 @@ function JournalPanel.create(s: ScopeFactory.HudScope, state: HudStateModule.Hud
                         count += 1
                     end
                     if count == 0 then
-                        return "Полностью открой слой — получи бонус 💰"
+                        return "Полностью открой слой — получи бонус монет"
                     end
                     return ("Награды за слои: %d"):format(count)
                 end),
-                TextSize = 10,
+                TextSize = text(10, 11),
                 Font = Enum.Font.Gotham,
                 TextColor3 = C.textMuted,
                 TextWrapped = true,

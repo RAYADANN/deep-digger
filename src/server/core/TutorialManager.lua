@@ -105,7 +105,7 @@ function TutorialManager:applyFirstTimeBonus(player: Player)
     if self._notify then
         self._notify(player, {
             text = "+" .. tostring(need) .. " монет на старт! Купи свою первую кирку 🪨",
-            icon = "💰",
+            icon = "coin",
             color = { r = 255, g = 210, b = 50 },
             duration = 4.5,
         })

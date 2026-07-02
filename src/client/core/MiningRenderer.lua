@@ -5,8 +5,16 @@ local shared = game:GetService("ReplicatedStorage"):WaitForChild("shared")
 local modules = game:GetService("ReplicatedStorage"):WaitForChild("Packages")
 local Logger = require(shared.util.Logger)
 local Constants = require(shared.constants)
+local LayerProfile = require(shared.data.LayerProfile)
 local UpgradeLogic = require(shared.util.UpgradeLogic)
 local PerfBeacon = require(shared.util.PerfBeacon)
+local OreFXPalette = require(shared.util.OreFXPalette)
+local OreBlockDecor = require(shared.util.OreBlockDecor)
+-- P2.9: оттенок/название мутации руды (единый источник client+server).
+local MutationLogic = require(shared.util.MutationLogic)
+local MiningBlockDecor = require(script.Parent.MiningBlockDecor)
+local MiningReach = require(shared.util.MiningReach)
+local MineZoneWorkspace = require(shared.util.MineZoneWorkspace)
 local Net = require(modules.Net)
 local OreLookup = require(script.Parent.OreLookup)
 local SoundManager = require(script.Parent.SoundManager)
@@ -15,11 +23,29 @@ local Haptics = require(script.Parent.Haptics)
 
 local TweenService = game:GetService("TweenService")
 local Debris = game:GetService("Debris")
+local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UiAssets = require(ReplicatedStorage:WaitForChild("shared").data.UiAssets)
 
--- Было MaxActivationDistance у ClickDetector; raycast только по папке шахты.
-local RAYCAST_DISTANCE = 200
+-- Луч прицела: ищем блок вдоль взгляда; дистанция от персонажа — MAX_MINE_REACH_BLOCKS.
+local RAYCAST_MAX_DISTANCE = 200
+
+local function appendMiningRaycastExcludes(exclude: { Instance })
+	for _, name in ({ "MineZoneMarker", "DeepDigger_TutorialPath", "MineRespawn" } :: { string }) do
+		local inst = workspace:FindFirstChild(name)
+		if inst then
+			table.insert(exclude, inst)
+		end
+	end
+end
+
+-- Сколько ждать появления MineZoneMarker (репликация/стриминг) до создания
+-- блоков. Пока маркер не готов — блоки висят в очереди (не кладутся на фоллбэк).
+-- После таймаута используется фоллбэк-точка, чтобы шахта не зависла невидимой
+-- при реально отсутствующем/неверно настроенном маркере.
+local ORIGIN_WAIT_TIMEOUT = 15
 
 -- Бюджет создания блоков на кадр. Сервер при пробитии полости/комнаты шлёт
 -- дельту на десятки-сотни блоков; если строить их все синхронно в одном
@@ -27,7 +53,7 @@ local RAYCAST_DISTANCE = 200
 -- очередь дренируется по CREATE_BUDGET_PER_FRAME штук за Heartbeat.
 -- 25/кадр: стартовый снапшот (~2250) раскладывается за ~1.5 c, всплеск
 -- delta на 137 блоков — за ~6 кадров (~100 мс) вместо одного фриза.
-local CREATE_BUDGET_PER_FRAME = 25
+local CREATE_BUDGET_PER_FRAME = 50
 
 -- Массовое удаление в одной delta (комната/полость) — десятки _animateDestroy
 -- подряд, каждый с chunkBurst + dust + shockwave = фриз 400–1300 мс (замерено:
@@ -149,61 +175,10 @@ end
 -- создаются ТОЛЬКО для rare+ (их единицы среди тысяч common-блоков), поэтому
 -- 2250 common-блоков остаются дешёвыми (SmoothPlastic без света).
 --
--- Поля:
---   material     — Enum.Material блока (дешёвые: Slate/Rock/Foil; Neon с блоков убран).
---   reflectance  — 0..1 блеск (Gold/Diamond «искрятся» под Lighting).
---   light        — nil или { range, brightness } для PointLight-ауры.
---   pulse        — true → лёгкая пульсация яркости света (legendary/mythic).
---   sparkleRate  — 0 = нет частиц; иначе базовый Rate sparkle-эмиттера.
-type RarityVisual = {
-    material: Enum.Material,
-    reflectance: number,
-    light: { range: number, brightness: number }?,
-    pulse: boolean,
-    sparkleRate: number,
-}
+-- PointLight epic+ ограничен MAX_ORE_GLOWS (proximity, см. _refreshBlockDecorations).
+local MAX_ORE_GLOWS = 80
 
--- PointLight только с epic+ (rare убран): ~15% блоков были бы rare → сотни
--- динамических источников света в тоннеле, Roblox такое не тянет. rare сохраняет
--- телеграф через материал/reflectance + sparkle. Свет epic+ дополнительно
--- ограничен MAX_RARITY_GLOWS (см. ниже) от накопления за длинную сессию.
--- Low-poly пас: ВСЕ блоки плоские (SmoothPlastic, reflectance 0) — шумные
--- материалы убраны, чтобы куб сливался с low-poly картой. Глубина/ценность
--- телеграфятся не материалом куба, а: (1) цветом руды, (2) кристаллами-
--- наростами (protrusion) и (3) PointLight-аурой epic+. Sparkle-частицы с
--- блоков убраны (их роль взяли кристаллы) — минус постоянные эмиттеры.
-local ORE_VISUAL_BY_RARITY: { [string]: RarityVisual } = {
-    common = { material = Enum.Material.SmoothPlastic, reflectance = 0.0, light = nil, pulse = false, sparkleRate = 0 },
-    uncommon = { material = Enum.Material.SmoothPlastic, reflectance = 0.0, light = nil, pulse = false, sparkleRate = 0 },
-    rare = { material = Enum.Material.SmoothPlastic, reflectance = 0.0, light = nil, pulse = false, sparkleRate = 0 },
-    epic = { material = Enum.Material.SmoothPlastic, reflectance = 0.0, light = { range = 8, brightness = 1.0 }, pulse = false, sparkleRate = 0 },
-    legendary = { material = Enum.Material.SmoothPlastic, reflectance = 0.0, light = { range = 10, brightness = 1.6 }, pulse = true, sparkleRate = 0 },
-    mythic = { material = Enum.Material.SmoothPlastic, reflectance = 0.0, light = { range = 13, brightness = 2.2 }, pulse = true, sparkleRate = 0 },
-}
-
-local DEFAULT_VISUAL: RarityVisual = ORE_VISUAL_BY_RARITY.common
-
--- Жёсткий кап на одновременные rarity-PointLight'ы. Даже epic+ копятся за
--- сессию (раскопанные стены не выгружаются); без капа это сотни источников.
-local MAX_RARITY_GLOWS = 40
-
--- ===== Low-poly restyle helpers =====
--- Цветовой джиттер: лёгкий разброс яркости/тона на блок, чтобы стена из
--- одинаковых кубов не выглядела пластиковым монолитом (ключевой low-poly приём).
-local JITTER_V = 0.06
-local JITTER_H = 0.015
-local function jitterColor(c: Color3): Color3
-    local h, s, v = c:ToHSV()
-    h = (h + (math.random() - 0.5) * 2 * JITTER_H) % 1
-    v = math.clamp(v + (math.random() - 0.5) * 2 * JITTER_V, 0, 1)
-    return Color3.fromHSV(h, s, v)
-end
-local function darkenColor(c: Color3, a: number): Color3 return c:Lerp(Color3.new(0, 0, 0), a) end
-local function brightenColor(c: Color3, a: number): Color3 return c:Lerp(Color3.new(1, 1, 1), a) end
-local function lumOf(c: Color3): number return c.R * 0.299 + c.G * 0.587 + c.B * 0.114 end
 local function smoothSurfaces(p: BasePart)
-    -- Плоские грани без Studs/Inlet: на SmoothPlastic стандартные грани вылезают
-    -- «пупырышками» и убивают low-poly вид.
     p.TopSurface = Enum.SurfaceType.Smooth
     p.BottomSurface = Enum.SurfaceType.Smooth
     p.LeftSurface = Enum.SurfaceType.Smooth
@@ -212,40 +187,23 @@ local function smoothSurfaces(p: BasePart)
     p.BackSurface = Enum.SurfaceType.Smooth
 end
 
--- Кристаллы-наросты по rarity. Glass для rare/epic, Neon для legendary/mythic
--- (светятся как акценты на low-poly карте). Кол-во/масштаб растут с редкостью.
-local CRYSTAL_BY_RARITY: { [string]: { shards: number, scale: number, mat: Enum.Material, refl: number } } = {
-    uncommon = { shards = 2, scale = 0.8, mat = Enum.Material.Glass, refl = 0.12 },
-    rare = { shards = 3, scale = 0.95, mat = Enum.Material.Glass, refl = 0.18 },
-    epic = { shards = 4, scale = 1.1, mat = Enum.Material.Glass, refl = 0.28 },
-    legendary = { shards = 5, scale = 1.25, mat = Enum.Material.Neon, refl = 0.0 },
-    mythic = { shards = 6, scale = 1.45, mat = Enum.Material.Neon, refl = 0.0 },
-}
--- Кап на блоки с наростами одновременно (как MAX_RARITY_GLOWS). Сами шарды
--- дешёвые (anchored, massless, без света), но uncommon-кристаллы (амётист,
--- небула) могут встречаться часто в глубоких слоях — ограничиваем на всякий.
--- Накидка-меш = 1 part на блок (дешевле старых шардов), но висит на ВСЕХ
--- не-наполнителях (их больше) — поэтому кап выше.
-local MAX_PROTRUSIONS = 250
+local FILLER_WEIGHT = OreBlockDecor.FILLER_WEIGHT
+-- Накидки только в конусе камеры (как ambient/glow — не на все 500 блоков сразу).
+local MAX_VISIBLE_SHELLS = 140
+local DECOR_RANGE = 96
+local DECOR_FOV_ATTACH = 0.38
+local DECOR_FOV_KEEP = 0.24
+local DECOR_FOV_WEIGHT = 52
 
--- ===== Накидка (Blender-меш поверх руды) =====
--- Меш «Version1» (Kit): тонкая изогнутая обшивка-кластер гранёных кристаллов,
--- которая ложится на грань блока. Вешается на ВСЕ не-наполнительные руды цветом
--- руды (кристалл светлее породы; порода = цвет руды затемнён в _createPart).
--- legendary/mythic получают Neon-грани (светятся в темноте). Рендерим через
--- SpecialMesh (FileMesh) — работает в рантайме без AssetService-yield'ов.
-local SHELL_MESH_ID = "rbxassetid://71939651950188"
--- ВАЖНО: SpecialMesh.Scale множит СЫРУЮ геометрию меша, а не размер MeshPart.
--- Сырой bbox этого ассета ~13.7×135.7×175.2 студа (импортный масштаб ~43.9×),
--- поэтому Scale=1 дал бы накидку на пол-карты. Чтобы накидка вышла ~0.33×3.26×4.2
--- студа (грань блока 4.5) — масштаб ~0.024 (= 1.05 / 43.9).
-local SHELL_SCALE = 0.024
--- Насколько кристалл светлее цвета руды (порода = тот же цвет, но темнее).
-local SHELL_BRIGHTEN = 0.12
--- Наполнитель слоя определяем по весу спавна (наполнитель = 900; всё ниже — руда).
-local FILLER_WEIGHT = 300
--- Свечение граней с этих редкостей.
-local SHELL_NEON_RARITY: { [string]: boolean } = { legendary = true, mythic = true }
+local AMBIENT_FX_FOLDER = "OreAmbientFX"
+local AMBIENT_FX_HOLDER = "AmbientFXHolder"
+local AMBIENT_FX_RARITY: { [string]: boolean } = {
+    uncommon = true, rare = true, epic = true, legendary = true, mythic = true,
+}
+local AMBIENT_FX_RANGE = 96
+local SHELL_RANGE = 128
+local AMBIENT_FX_TICK = 0.175
+local MAX_AMBIENT_FX = 80
 
 -- Shockwave: расширяющаяся neon-сфера. Это "ударная волна" в точке разрушения.
 -- Полностью локальный эффект — никаких ScreenGui, никаких CC-эффектов.
@@ -320,7 +278,7 @@ end
 
 -- Dust cloud: облако пыли цвета руды. Используется smoke_main (не sparkle) —
 -- даёт ощущение "блок осыпался", а не "магическая вспышка".
-local function dustCloud(host: BasePart, color: Color3, count: number, scale: number?)
+local function dustCloud(host: BasePart, color: Color3, count: number, scale: number?, lightEmission: number?)
     PerfBeacon.bump("fxDust")
     local s = scale or 1
     local e = Instance.new("ParticleEmitter")
@@ -329,7 +287,7 @@ local function dustCloud(host: BasePart, color: Color3, count: number, scale: nu
         ColorSequenceKeypoint.new(0, color),
         ColorSequenceKeypoint.new(1, Color3.new(color.R * 0.45, color.G * 0.45, color.B * 0.45)),
     })
-    e.LightEmission = 0
+    e.LightEmission = lightEmission or 0
     e.LightInfluence = 1
     e.Rate = 0
     e.Lifetime = NumberRange.new(0.5 * s, 1.0 * s)
@@ -371,16 +329,29 @@ local function coinPop(parent: Instance, position: Vector3, value: number, rarit
     gui.Parent = host
 
     local isBig = rarity == "rare" or rarity == "epic" or rarity == "legendary" or rarity == "mythic"
+    local row = Instance.new("Frame")
+    row.Size = UDim2.fromScale(1, 1)
+    row.BackgroundTransparency = 1
+    row.Parent = gui
+
+    local coinIcon = Instance.new("ImageLabel")
+    coinIcon.Size = UDim2.fromOffset(isBig and 26 or 20, isBig and 26 or 20)
+    coinIcon.Position = UDim2.new(0.5, isBig and -52 or -42, 0.5, isBig and -13 or -10)
+    coinIcon.BackgroundTransparency = 1
+    coinIcon.Image = UiAssets.coin()
+    coinIcon.ScaleType = Enum.ScaleType.Fit
+    coinIcon.Parent = row
+
     local l = Instance.new("TextLabel")
-    l.Size = UDim2.fromScale(1, 1)
+    l.Size = UDim2.new(1, 0, 1, 0)
     l.BackgroundTransparency = 1
-    l.Text = "+" .. shortNumber(value) .. " 💰"
+    l.Text = "+" .. shortNumber(value)
     l.Font = Enum.Font.GothamBlack
     l.TextSize = isBig and 28 or 22
     l.TextColor3 = Color3.fromRGB(255, 215, 90)
     l.TextStrokeTransparency = 0
     l.TextStrokeColor3 = Color3.fromRGB(40, 25, 0)
-    l.Parent = gui
+    l.Parent = row
 
     local stroke = Instance.new("UIStroke")
     stroke.Color = Color3.fromRGB(80, 50, 0)
@@ -451,8 +422,9 @@ function MiningRenderer.new()
     local self = setmetatable({}, MiningRenderer)
     self._parts = {}; self._blockData = {}; self._parent = nil; self._enabled = false
     self._showRarity = false; self._showHPBar = true
-    self._activeGlows = 0 -- счётчик живых rarity-PointLight'ов (кап MAX_RARITY_GLOWS)
-    self._activeProtrusions = 0 -- счётчик блоков с кристаллами-наростами (кап MAX_PROTRUSIONS)
+    self._activeGlows = 0
+    self._activeShells = 0
+    self._activeAmbientFX = 0
     self._lastSwingAt = 0
     self._swingDelay = UpgradeLogic.swingDelaySeconds(1)
     self._log = Logger.new("MiningRenderer")
@@ -460,6 +432,8 @@ function MiningRenderer.new()
     self._cursorLightHost = nil :: BasePart?
     self._cursorLight = nil :: PointLight?
     self._rayParams = nil :: RaycastParams?
+    self._obstacleRayFilter = nil :: RaycastParams?
+    self._minePlatformExcludes = {} :: { Instance }
     self._inputConn = nil :: RBXScriptConnection?
     self._hoverConn = nil :: RBXScriptConnection?
     -- Очередь отложенного создания блоков (анти-фриз, см. CREATE_BUDGET_PER_FRAME).
@@ -467,9 +441,12 @@ function MiningRenderer.new()
     self._createHead = 1        -- индекс головы очереди (без table.remove, O(1))
     self._createPending = {}    -- key -> entry: для отмены/замены до создания
     self._createConn = nil :: RBXScriptConnection?
+    self._ambientFxConn = nil :: RBXScriptConnection?
+    self._ambientFxAccum = 0
     self._syncConn = nil :: RBXScriptConnection?
     self._gen = 0 -- поколение (см. _isStale); проставляется в start()
     self._origin = nil :: Vector3? -- мировой центр шахты, кэш (см. _mineOrigin)
+    self._originDeadline = 0 -- до этого времени ждём MineZoneMarker (см. _drainCreateQueue)
     return self
 end
 
@@ -481,30 +458,41 @@ end
                   зоны, дальше блоки копаются вниз (Neighbor Reveal) и заполняют
                   всю коробку (её высота = стартовый куб, SURFACE_H блоков).
     Шахта появляется ровно в зоне маркера и следует за ним, если его подвинуть.
-    Кэшируется на жизнь renderer'а (блоков тысячи — не читаем workspace на
-    каждый). Сбрасывается в start(): новый респавн подхватит новое положение
-    маркера. Fallback'ы: MineRespawn, затем историческое (0,0,30).
+    Кэшируется на жизнь renderer'а (блоков тысячи — не читаем workspace на каждый).
+
+    ВАЖНО (фикс «шахта иногда не в зоне»): origin кэшируется ТОЛЬКО когда найден
+    реальный MineZoneMarker.Volume. Раньше при гонке загрузки (маркер ещё не
+    реплицировался/не стримнулся к моменту первого блока) кэшировался фоллбэк и
+    вся шахта на сессию уезжала. Теперь создание блоков ждёт маркер (см.
+    _drainCreateQueue), фоллбэк — только после таймаута, чтобы шахта не зависла
+    невидимой при реально отсутствующем маркере.
 ]]
-function MiningRenderer:_mineOrigin(): Vector3
+function MiningRenderer:_resolveOrigin(): Vector3?
     if self._origin then return self._origin end
     local marker = workspace:FindFirstChild("MineZoneMarker")
     local volume = marker and marker:FindFirstChild("Volume")
     if volume and volume:IsA("BasePart") then
         -- верх-центр коробки: блок y=0 верхней гранью ложится на верх зоны
         self._origin = volume.Position + Vector3.new(0, volume.Size.Y / 2, 0)
-    else
-        local mr = workspace:FindFirstChild("MineRespawn")
-        if mr and mr:IsA("BasePart") then
-            self._origin = mr.Position
-        else
-            self._origin = Vector3.new(0, 0, 30)
-        end
     end
     return self._origin
 end
 
-function MiningRenderer:setSwingDelay(speedLevel: number)
-    self._swingDelay = UpgradeLogic.swingDelaySeconds(speedLevel)
+function MiningRenderer:_fallbackOrigin(): Vector3
+    local mr = workspace:FindFirstChild("MineRespawn")
+    if mr and mr:IsA("BasePart") then return mr.Position end
+    return Vector3.new(0, 0, 30)
+end
+
+-- Гарантированно возвращает Vector3 (для позиционирования). К моменту вызова из
+-- _createPart origin уже резолвнут гейтом в _drainCreateQueue; этот геттер —
+-- страховка, чтобы вызывающие никогда не получили nil.
+function MiningRenderer:_mineOrigin(): Vector3
+    return self._origin or self:_resolveOrigin() or self:_fallbackOrigin()
+end
+
+function MiningRenderer:setSwingDelay(speedLevel: number, speedBoostMult: number?)
+    self._swingDelay = UpgradeLogic.swingDelaySeconds(speedLevel, speedBoostMult)
 end
 
 function MiningRenderer:_folder()
@@ -518,7 +506,8 @@ function MiningRenderer:_folder()
         if c.Name == "DeepDigger_Mine" then c:Destroy() end
     end
     local f = Instance.new("Folder"); f.Name = "DeepDigger_Mine"; f.Parent = workspace; self._parent = f
-    self._rayParams = nil -- пересоздадим с новым FilterDescendantsInstances
+    self._rayParams = nil
+    self._obstacleRayFilter = nil
 end
 
 -- Поколение активного renderer'а. _G переживает респавн (Luau-VM клиента не
@@ -541,19 +530,97 @@ function MiningRenderer:_raycastParams(): RaycastParams?
     return self._rayParams
 end
 
-function MiningRenderer:_raycastBlockPart(screenPos: Vector2?): BasePart?
+function MiningRenderer:_obstacleRayParams(): RaycastParams?
+    if not self._parent then
+        return nil
+    end
+    if not self._obstacleRayFilter then
+        local p = RaycastParams.new()
+        p.FilterType = Enum.RaycastFilterType.Exclude
+        p.IgnoreWater = true
+        self._obstacleRayFilter = p
+    end
+    local exclude: { Instance } = { self._parent :: Instance }
+    local char = Players.LocalPlayer.Character
+    if char then
+        table.insert(exclude, char)
+    end
+    if self._cursorLightHost then
+        table.insert(exclude, self._cursorLightHost)
+    end
+    appendMiningRaycastExcludes(exclude)
+    for _, inst in self._minePlatformExcludes do
+        if inst.Parent then
+            table.insert(exclude, inst)
+        end
+    end
+    self._obstacleRayFilter.FilterDescendantsInstances = exclude
+    return self._obstacleRayFilter
+end
+
+function MiningRenderer:_playerRoot(): BasePart?
+    local char = Players.LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if root and root:IsA("BasePart") then
+        return root :: BasePart
+    end
+    return nil
+end
+
+function MiningRenderer:_withinMineReach(worldPos: Vector3): boolean
+    local root = self:_playerRoot()
+    if not root then
+        return false
+    end
+    return MiningReach.isWithinReach(root.Position, worldPos)
+end
+
+function MiningRenderer:_pickBlockFromHit(hit: RaycastResult?): BasePart?
+    if not hit or not hit.Instance:IsA("BasePart") then
+        return nil
+    end
+    if not self._parts[hit.Instance.Name] then
+        return nil
+    end
+    if hit.Instance:GetAttribute("_destroying") then
+        return nil
+    end
+    return hit.Instance
+end
+
+function MiningRenderer:_raycastMine(screenPos: Vector2?): RaycastResult?
     local cam = workspace.CurrentCamera
-    local params = self:_raycastParams()
-    if not cam or not params then return nil end
+    local mineParams = self:_raycastParams()
+    local obstacleParams = self:_obstacleRayParams()
+    if not cam or not mineParams or not obstacleParams then
+        return nil
+    end
     PerfBeacon.bump("raycasts")
     local mouse = screenPos or UserInputService:GetMouseLocation()
     local ray = cam:ViewportPointToRay(mouse.X, mouse.Y)
-    local hit = workspace:Raycast(ray.Origin, ray.Direction * RAYCAST_DISTANCE, params)
-    if hit and hit.Instance:IsA("BasePart") and self._parts[hit.Instance.Name] then
-        if hit.Instance:GetAttribute("_destroying") then return nil end
-        return hit.Instance
+    local direction = ray.Direction
+
+    local mineHit = workspace:Raycast(ray.Origin, direction * RAYCAST_MAX_DISTANCE, mineParams)
+    if not mineHit then
+        return nil
     end
-    return nil
+
+    local part = self:_pickBlockFromHit(mineHit)
+    if not part or not self:_withinMineReach(part.Position) then
+        return nil
+    end
+
+    PerfBeacon.bump("raycasts")
+    local obstacleHit = workspace:Raycast(ray.Origin, direction * mineHit.Distance, obstacleParams)
+    if obstacleHit and obstacleHit.Distance < mineHit.Distance - 0.05 then
+        return nil
+    end
+
+    return mineHit
+end
+
+function MiningRenderer:_raycastBlockPart(screenPos: Vector2?): BasePart?
+    return self:_pickBlockFromHit(self:_raycastMine(screenPos))
 end
 
 function MiningRenderer:_hoverEnter(key: string)
@@ -604,16 +671,15 @@ function MiningRenderer:_hoverEnter(key: string)
     if not part:GetAttribute("_squashing") then
         TweenService:Create(part, TweenInfo.new(0.1, Enum.EasingStyle.Quad), { Size = HOVER_BSv }):Play()
     end
-    -- Накидка выезжает наружу вместе с растущей гранью блока, чтобы не утонуть.
-    local shell = part:FindFirstChild("OreShell")
-    if shell and shell:IsA("BasePart") then
+    -- Каждая накидка выезжает наружу по нормали своей грани.
+    self:_forEachShellFace(part, function(shell)
         local rest = shell:GetAttribute("RestCF")
         if typeof(rest) == "CFrame" then
             TweenService:Create(shell, TweenInfo.new(0.1, Enum.EasingStyle.Quad), {
                 CFrame = rest + rest.RightVector * (BS * 0.025),
             }):Play()
         end
-    end
+    end)
 end
 
 function MiningRenderer:_hoverLeave(key: string)
@@ -628,14 +694,12 @@ function MiningRenderer:_hoverLeave(key: string)
     if not part:GetAttribute("_squashing") then
         TweenService:Create(part, TweenInfo.new(0.1, Enum.EasingStyle.Quad), { Size = BSv }):Play()
     end
-    -- Накидка возвращается на опорную позицию.
-    local shell = part:FindFirstChild("OreShell")
-    if shell and shell:IsA("BasePart") then
+    self:_forEachShellFace(part, function(shell)
         local rest = shell:GetAttribute("RestCF")
         if typeof(rest) == "CFrame" then
             TweenService:Create(shell, TweenInfo.new(0.1, Enum.EasingStyle.Quad), { CFrame = rest }):Play()
         end
-    end
+    end)
 end
 
 -- Небольшой PointLight следует за лучом мыши в шахте (вместо фонарика на игроке).
@@ -663,26 +727,32 @@ function MiningRenderer:_ensureCursorLight()
     self._cursorLight = light
 end
 
-function MiningRenderer:_updateCursorLight()
-    if not self._parent then return end
+function MiningRenderer:_applyCursorLight(hit: RaycastResult?)
+    if not self._parent then
+        return
+    end
     self:_ensureCursorLight()
     local host = self._cursorLightHost
     local light = self._cursorLight
-    if not host or not light then return end
+    if not host or not light then
+        return
+    end
     local cam = workspace.CurrentCamera
-    local params = self:_raycastParams()
-    if not cam or not params then
+    if not cam then
+        light.Enabled = false
+        return
+    end
+    if workspace:GetAttribute("DD_TutorialMineHint") then
         light.Enabled = false
         return
     end
     local cfg = Constants.CURSOR_LIGHT or { fallbackDistance = 14 }
-    local mouse = UserInputService:GetMouseLocation()
-    local ray = cam:ViewportPointToRay(mouse.X, mouse.Y)
-    local hit = workspace:Raycast(ray.Origin, ray.Direction * RAYCAST_DISTANCE, params)
     local pos: Vector3
     if hit then
         pos = hit.Position + hit.Normal * 0.25
     else
+        local mouse = UserInputService:GetMouseLocation()
+        local ray = cam:ViewportPointToRay(mouse.X, mouse.Y)
         pos = ray.Origin + ray.Direction * (cfg.fallbackDistance or 14)
     end
     host.Position = pos
@@ -698,10 +768,13 @@ function MiningRenderer:_destroyCursorLight()
 end
 
 function MiningRenderer:_updateHover()
-    self:_updateCursorLight()
-    local part = self:_raycastBlockPart()
+    local hit = self:_raycastMine()
+    self:_applyCursorLight(hit)
+    local part = self:_pickBlockFromHit(hit)
     local key = if part then part.Name else nil
-    if key == self._hoveredKey then return end
+    if key == self._hoveredKey then
+        return
+    end
     if self._hoveredKey then
         self:_hoverLeave(self._hoveredKey)
     end
@@ -743,12 +816,23 @@ function MiningRenderer:_setupInput()
             self:_drainCreateQueue()
         end
     end)
+    self._ambientFxAccum = 0
+    self._ambientFxConn = RunService.Heartbeat:Connect(function(dt)
+        if self:_isStale() then self:stop(); return end
+        if not self._enabled then return end
+        self._ambientFxAccum += dt
+        if self._ambientFxAccum >= AMBIENT_FX_TICK then
+            self._ambientFxAccum = 0
+            self:_refreshBlockDecorations()
+        end
+    end)
 end
 
 function MiningRenderer:_teardownInput()
     if self._inputConn then self._inputConn:Disconnect(); self._inputConn = nil end
     if self._hoverConn then self._hoverConn:Disconnect(); self._hoverConn = nil end
     if self._createConn then self._createConn:Disconnect(); self._createConn = nil end
+    if self._ambientFxConn then self._ambientFxConn:Disconnect(); self._ambientFxConn = nil end
     if self._hoveredKey then
         self:_hoverLeave(self._hoveredKey)
         self._hoveredKey = nil
@@ -823,60 +907,24 @@ function MiningRenderer:_ensureRarityTag(key)
     return tag
 end
 
--- Строит low-poly кластер кристаллов-шардов поверх блока. Шарды — child'ы
--- блока (anchored, massless, без коллизий/теней/света), удаляются вместе с ним.
--- Тёмные руды (void) красят кристаллы в цвет редкости, чтобы не слиться с чернотой.
--- Возвращает true, если нарост создан (для учёта в капе MAX_PROTRUSIONS).
-function MiningRenderer:_addProtrusion(part: BasePart, oreId: string, rarity: string): boolean
-    local cfg = CRYSTAL_BY_RARITY[rarity]
-    if not cfg then return false end
-    if self._activeProtrusions >= MAX_PROTRUSIONS then return false end
-    local oreColor = OreLookup.getColor(oreId)
-    local crystalColor
-    if lumOf(oreColor) < 0.18 then
-        crystalColor = brightenColor(OreLookup.getRarityColor(oreId), 0.15)
-    else
-        crystalColor = brightenColor(oreColor, 0.18)
-    end
-    local pos = part.Position
-    local topY = pos.Y + BS / 2
-    for _ = 1, cfg.shards do
-        local h = BS * 0.55 * cfg.scale * (0.7 + math.random() * 0.6)
-        local w = BS * 0.16 * cfg.scale * (0.8 + math.random() * 0.5)
-        local shard = Instance.new("Part")
-        shard.Name = "Crystal"
-        shard.Size = Vector3.new(w, h, w)
-        shard.Anchored = true
-        shard.CanCollide = false; shard.CanTouch = false; shard.CanQuery = false; shard.CastShadow = false
-        shard.Massless = true
-        shard.Material = cfg.mat
-        shard.Reflectance = cfg.refl
-        shard.Color = crystalColor
-        smoothSurfaces(shard)
-        local ox = (math.random() - 0.5) * BS * 0.55
-        local oz = (math.random() - 0.5) * BS * 0.55
-        shard.CFrame = CFrame.new(pos.X + ox, topY + h * 0.30, pos.Z + oz)
-            * CFrame.Angles(
-                math.rad((math.random() - 0.5) * 38),
-                math.rad(45 + math.random() * 30),
-                math.rad((math.random() - 0.5) * 38)
-            )
-        shard.Parent = part
-    end
-    self._activeProtrusions += 1
-    return true
+function MiningRenderer:_decorDef(oreId: string): OreBlockDecor.OreDecorDef?
+    local def = OreLookup.getDef(oreId)
+    if not def then return nil end
+    return {
+        id = oreId,
+        color = OreLookup.getColor(oreId),
+        rarity = OreLookup.getRarity(oreId),
+        weight = def.weight,
+    }
 end
 
--- Выбирает мировую нормаль грани, на которую вешать накидку: открытую (без
--- соседа) грань, наиболее обращённую к камере. Соседи проверяются по сетке
--- (созданные + ожидающие создания). Если всё закрыто — верх (к поверхности).
 function MiningRenderer:_shellFaceNormal(x: number, z: number, y: number): Vector3
     local faces = {
         { key = string.format("%d_%d_%d", x + 1, z, y), n = Vector3.new(1, 0, 0) },
         { key = string.format("%d_%d_%d", x - 1, z, y), n = Vector3.new(-1, 0, 0) },
         { key = string.format("%d_%d_%d", x, z + 1, y), n = Vector3.new(0, 0, 1) },
         { key = string.format("%d_%d_%d", x, z - 1, y), n = Vector3.new(0, 0, -1) },
-        { key = string.format("%d_%d_%d", x, z, y - 1), n = Vector3.new(0, 1, 0) },  -- меньший y = выше (см. _createPart)
+        { key = string.format("%d_%d_%d", x, z, y - 1), n = Vector3.new(0, 1, 0) },
         { key = string.format("%d_%d_%d", x, z, y + 1), n = Vector3.new(0, -1, 0) },
     }
     local o = self:_mineOrigin()
@@ -891,89 +939,434 @@ function MiningRenderer:_shellFaceNormal(x: number, z: number, y: number): Vecto
             if score > bestScore then bestScore = score; best = f.n end
         end
     end
-    return best or Vector3.new(0, 1, 0)
+    return best or Vector3.new(1, 0, 0)
 end
 
--- Вешает накидку-меш на открытую грань блока. Цвет — цвет руды чуть светлее
--- (порода под ней уже затемнена). Тёмные руды берут цвет редкости, чтобы не
--- слиться. legendary/mythic — Neon. Меш anchored/massless/без коллизий/теней,
--- удаляется вместе с блоком. Учитывается в капе MAX_PROTRUSIONS.
-function MiningRenderer:_addShell(part: BasePart, x: number, z: number, y: number, oreId: string, rarity: string): boolean
-    if self._activeProtrusions >= MAX_PROTRUSIONS then return false end
-    local oreColor = OreLookup.getColor(oreId)
-    local shellColor
-    if lumOf(oreColor) < 0.14 then
-        shellColor = brightenColor(OreLookup.getRarityColor(oreId), 0.1)
-    else
-        shellColor = brightenColor(oreColor, SHELL_BRIGHTEN)
+-- Все открытые (без соседа) грани блока.
+function MiningRenderer:_shellOpenFaceNormals(x: number, z: number, y: number): { Vector3 }
+    local faces = {
+        { key = string.format("%d_%d_%d", x + 1, z, y), n = Vector3.new(1, 0, 0) },
+        { key = string.format("%d_%d_%d", x - 1, z, y), n = Vector3.new(-1, 0, 0) },
+        { key = string.format("%d_%d_%d", x, z + 1, y), n = Vector3.new(0, 0, 1) },
+        { key = string.format("%d_%d_%d", x, z - 1, y), n = Vector3.new(0, 0, -1) },
+        { key = string.format("%d_%d_%d", x, z, y - 1), n = Vector3.new(0, 1, 0) },
+        { key = string.format("%d_%d_%d", x, z, y + 1), n = Vector3.new(0, -1, 0) },
+    }
+    local open: { Vector3 } = {}
+    for _, f in ipairs(faces) do
+        local occupied = self._parts[f.key] ~= nil or self._createPending[f.key] ~= nil
+        if not occupied then
+            table.insert(open, f.n)
+        end
+    end
+    return open
+end
+
+function MiningRenderer:_forEachShellFace(part: BasePart, fn: (BasePart) -> ())
+    local shell = part:FindFirstChild("OreShell")
+    if not shell then return end
+    if shell:IsA("BasePart") then
+        fn(shell)
+        return
+    end
+    for _, child in shell:GetChildren() do
+        if child:IsA("BasePart") then
+            fn(child)
+        end
+    end
+end
+
+function MiningRenderer:_decorVisConfig(): MiningBlockDecor.VisConfig
+    return {
+        range = DECOR_RANGE,
+        fovAttach = DECOR_FOV_ATTACH,
+        fovKeep = DECOR_FOV_KEEP,
+        fovWeight = DECOR_FOV_WEIGHT,
+    }
+end
+
+function MiningRenderer:_decorCameraBasis(): (Vector3?, Vector3?)
+    local cam = workspace.CurrentCamera
+    if cam then
+        return cam.CFrame.Position, cam.CFrame.LookVector
+    end
+    return self:_ambientFXOrigin(), nil
+end
+
+function MiningRenderer:_reconcileNeighborShells(x: number, z: number, y: number)
+    local offsets = {
+        { 1, 0, 0 }, { -1, 0, 0 },
+        { 0, 1, 0 }, { 0, -1, 0 },
+        { 0, 0, 1 }, { 0, 0, -1 },
+    }
+    for _, off in ipairs(offsets) do
+        local nx, nz, ny = x + off[1], z + off[2], y + off[3]
+        local nKey = string.format("%d_%d_%d", nx, nz, ny)
+        local part = self._parts[nKey]
+        local d = self._blockData[nKey]
+        if part and d and d.hasShell and not self:_isFillerOre(d.oreId) then
+            self:_reconcileShellFaces(part, nx, nz, ny, d.oreId, OreLookup.getRarity(d.oreId))
+        end
+    end
+end
+
+function MiningRenderer:_refreshVisibleShells(camPos: Vector3, camLook: Vector3)
+    local visCfg = self:_decorVisConfig()
+    local entries: { MiningBlockDecor.Entry } = {}
+
+    for key, part in pairs(self._parts) do
+        local d = self._blockData[key]
+        if not d or self:_isFillerOre(d.oreId) then
+            continue
+        end
+        table.insert(entries, {
+            key = key,
+            hasDecor = d.hasShell == true,
+            vis = MiningBlockDecor.computeVisibility(part.Position, camPos, camLook, visCfg),
+        })
     end
 
-    local normal = self:_shellFaceNormal(x, z, y)
-    -- Ортонормированный базис: тонкая ось меша (local X) = нормаль грани наружу.
-    local right = normal.Unit
-    local up0 = if math.abs(right.Y) < 0.9 then Vector3.new(0, 1, 0) else Vector3.new(0, 0, 1)
-    local up = (up0 - right * right:Dot(up0)).Unit
-    local back = right:Cross(up)
-    local pos = part.Position + right * (BS / 2 + 0.12)
+    local pick = MiningBlockDecor.pick(entries, MAX_VISIBLE_SHELLS, self._hoveredKey)
 
-    local host = Instance.new("Part")
-    host.Name = "OreShell"
-    host.Size = Vector3.new(1, 1, 1) -- визуал задаёт SpecialMesh.Scale, не Size
-    host.Anchored = true
-    host.CanCollide = false; host.CanTouch = false; host.CanQuery = false; host.CastShadow = false
-    host.Massless = true
-    host.Material = if SHELL_NEON_RARITY[rarity] then Enum.Material.Neon else Enum.Material.SmoothPlastic
-    host.Reflectance = 0
-    host.Color = shellColor
-    host.CFrame = CFrame.fromMatrix(pos, right, up, back)
+    for key, _ in pairs(pick.remove) do
+        local part = self._parts[key]
+        local d = self._blockData[key]
+        if part and d and d.hasShell then
+            self:_detachShell(part, d)
+        end
+    end
 
-    local mesh = Instance.new("SpecialMesh")
-    mesh.MeshType = Enum.MeshType.FileMesh
-    mesh.MeshId = SHELL_MESH_ID
-    mesh.Scale = Vector3.new(SHELL_SCALE, SHELL_SCALE, SHELL_SCALE)
-    mesh.Parent = host
+    for key, _ in pairs(pick.attach) do
+        local part = self._parts[key]
+        local d = self._blockData[key]
+        if not part or not d or d.hasShell then
+            continue
+        end
+        local bx, bz, by = parseKey(key)
+        if self:_addShell(part, bx, bz, by, d.oreId, OreLookup.getRarity(d.oreId)) then
+            d.hasShell = true
+        end
+    end
 
-    host.Parent = part
-    -- Опорный CFrame: hover двигает накидку наружу вместе с гранью блока,
-    -- hoverLeave возвращает сюда. RightVector = нормаль грани (наружу).
-    host:SetAttribute("RestCF", host.CFrame)
-    self._activeProtrusions += 1
+    for key, _ in pairs(pick.keep) do
+        if pick.attach[key] then
+            continue
+        end
+        local part = self._parts[key]
+        local d = self._blockData[key]
+        if not part or not d or not d.hasShell then
+            continue
+        end
+        local bx, bz, by = parseKey(key)
+        self:_reconcileShellFaces(part, bx, bz, by, d.oreId, OreLookup.getRarity(d.oreId))
+    end
+end
+
+-- Накидка-меш на открытые грани (как OreReferenceBlocks_Restyled, без закрытых соседей).
+function MiningRenderer:_addShell(part: BasePart, x: number, z: number, y: number, oreId: string, _rarity: string): boolean
+    self:_cleanupStaleOreShell(part, nil)
+    local existing = part:FindFirstChild("OreShell")
+    if existing and existing:IsA("Folder") and #existing:GetChildren() > 0 then
+        return true
+    end
+
+    local decorDef = self:_decorDef(oreId)
+    if not decorDef or OreBlockDecor.isFiller(decorDef) then return false end
+
+    local normals = self:_shellOpenFaceNormals(x, z, y)
+    if #normals == 0 then
+        normals = { self:_shellFaceNormal(x, z, y) }
+    end
+
+    if OreBlockDecor.mountShell(part, normals, decorDef, BS) then
+        self._activeShells += 1
+        return true
+    end
+    return false
+end
+
+-- Досоздаёт/снимает грани при раскопке соседей.
+function MiningRenderer:_reconcileShellFaces(part: BasePart, x: number, z: number, y: number, oreId: string, _rarity: string)
+    local folder = part:FindFirstChild("OreShell")
+    if not folder or folder:IsA("BasePart") then return end
+
+    local decorDef = self:_decorDef(oreId)
+    if not decorDef then return end
+
+    local openSet: { [string]: Vector3 } = {}
+    for _, n in ipairs(self:_shellOpenFaceNormals(x, z, y)) do
+        openSet[OreBlockDecor.faceKey(n)] = n
+    end
+
+    local present: { [string]: boolean } = {}
+    for _, child in folder:GetChildren() do
+        if child:IsA("BasePart") then
+            local fk = child:GetAttribute("FaceKey")
+            if typeof(fk) == "string" and openSet[fk] then
+                present[fk] = true
+            else
+                child:Destroy()
+            end
+        end
+    end
+
+    local shellColor = OreBlockDecor.shellColor(decorDef.color, decorDef.rarity)
+    for fk, normal in pairs(openSet) do
+        if not present[fk] then
+            OreBlockDecor.createShellFace(part.Position, normal, shellColor, decorDef.rarity, BS).Parent = folder
+        end
+    end
+end
+
+-- Шаблон ambient-FX для редкости (legacy; создание через OreBlockDecor).
+function MiningRenderer:_ambientFXOrigin(): Vector3?
+    local lp = game:GetService("Players").LocalPlayer
+    if lp and lp.Character then
+        local hrp = lp.Character:FindFirstChild("HumanoidRootPart")
+        if hrp and hrp:IsA("BasePart") then
+            return hrp.Position
+        end
+    end
+    local cam = workspace.CurrentCamera
+    return if cam then cam.CFrame.Position else nil
+end
+
+function MiningRenderer:_detachAmbientFX(part: BasePart, d: any?)
+    local holder = part:FindFirstChild(AMBIENT_FX_HOLDER)
+    if not holder then return end
+    holder:Destroy()
+    if d then d.hasAmbientFX = false end
+    self:_syncDecorFlag(part)
+end
+
+function MiningRenderer:_oreFXPalette(oreId: string): OreFXPalette.Palette
+    return OreFXPalette.fromColors(OreLookup.getColor(oreId), OreLookup.getRarityColor(oreId))
+end
+
+local AMBIENT_FX_TINT_ATTR = "OreTintId"
+-- Bump при смене алгоритма перекраски — все holder'ы перетинтуются на refresh.
+local AMBIENT_FX_TINT_VER = 2
+
+function MiningRenderer:_tintAmbientFXHolder(holder: Instance, oreId: string)
+    OreFXPalette.tintDescendants(holder, self:_oreFXPalette(oreId))
+    holder:SetAttribute(AMBIENT_FX_TINT_ATTR, oreId)
+    holder:SetAttribute("OreTintVer", AMBIENT_FX_TINT_VER)
+end
+
+function MiningRenderer:_ensureAmbientFXTinted(part: BasePart, oreId: string)
+    local holder = part:FindFirstChild(AMBIENT_FX_HOLDER)
+    if not holder then return end
+    if holder:GetAttribute(AMBIENT_FX_TINT_ATTR) == oreId
+        and holder:GetAttribute("OreTintVer") == AMBIENT_FX_TINT_VER then
+        return
+    end
+    self:_tintAmbientFXHolder(holder, oreId)
+end
+
+type OreGlowCfg = { range: number, brightness: number }
+
+function MiningRenderer:_resolveOreGlow(oreId: string): OreGlowCfg?
+    if self:_isFillerOre(oreId) then return nil end
+    local cfg = OreBlockDecor.resolveGlow(OreLookup.getRarity(oreId))
+    if not cfg then return nil end
+    return { range = cfg.range, brightness = cfg.brightness }
+end
+
+function MiningRenderer:_detachOreGlow(part: BasePart, d: any?)
+    local glow = part:FindFirstChild("RarityGlow")
+    if not glow then return end
+    glow:Destroy()
+    if d then d.hasGlow = false end
+    self:_syncDecorFlag(part)
+end
+
+function MiningRenderer:_syncOreGlow(part: BasePart, oreId: string, cfg: OreGlowCfg)
+    local glow = part:FindFirstChild("RarityGlow")
+    if not glow or not glow:IsA("PointLight") then return end
+    local decorDef = self:_decorDef(oreId)
+    if decorDef then
+        OreBlockDecor.syncRarityGlow(part, decorDef)
+    else
+        glow.Color = self:_oreFXPalette(oreId).glow
+        glow.Range = cfg.range
+        glow.Brightness = cfg.brightness
+    end
+end
+
+function MiningRenderer:_attachOreGlow(part: BasePart, oreId: string, d: any?): boolean
+    local decorDef = self:_decorDef(oreId)
+    if not decorDef or not OreBlockDecor.attachRarityGlow(part, decorDef) then
+        return false
+    end
+    if d then d.hasGlow = true end
+    part:SetAttribute("_hasDecor", true)
     return true
 end
 
-function MiningRenderer:_createPart(x, z, y, oreId, hp, maxHp)
+function MiningRenderer:_attachAmbientFX(part: BasePart, oreId: string, _rarity: string): boolean
+    local existing = part:FindFirstChild(AMBIENT_FX_HOLDER)
+    if existing then
+        self:_ensureAmbientFXTinted(part, oreId)
+        part:SetAttribute("_hasDecor", true)
+        return true
+    end
+    local decorDef = self:_decorDef(oreId)
+    if not decorDef or not OreBlockDecor.attachAmbientFX(part, decorDef, ReplicatedStorage:FindFirstChild(AMBIENT_FX_FOLDER)) then
+        return false
+    end
+    self:_tintAmbientFXHolder(part:FindFirstChild(AMBIENT_FX_HOLDER) :: Instance, oreId)
+    part:SetAttribute("_hasDecor", true)
+    return true
+end
+
+function MiningRenderer:_detachShell(part: BasePart, d: any?)
+    local shell = part:FindFirstChild("OreShell")
+    if not shell then return end
+    shell:Destroy()
+    if d and d.hasShell then
+        d.hasShell = false
+        self._activeShells = math.max(0, self._activeShells - 1)
+    end
+    self:_syncDecorFlag(part)
+end
+
+-- Legacy single-face Part и пустой Folder мешают повесить multi-face накидку.
+function MiningRenderer:_cleanupStaleOreShell(part: BasePart, d: any?)
+    local shell = part:FindFirstChild("OreShell")
+    if not shell then return end
+
+    local stale = shell:IsA("BasePart")
+        or (shell:IsA("Folder") and #shell:GetChildren() == 0)
+    if not stale then return end
+
+    shell:Destroy()
+    if d then d.hasShell = false end
+    self._activeShells = math.max(0, self._activeShells - 1)
+    self:_syncDecorFlag(part)
+end
+
+function MiningRenderer:_syncDecorFlag(part: BasePart)
+    local has = part:FindFirstChild("OreShell") ~= nil
+        or part:FindFirstChild(AMBIENT_FX_HOLDER) ~= nil
+        or part:FindFirstChild("RarityGlow") ~= nil
+    part:SetAttribute("_hasDecor", has)
+end
+
+function MiningRenderer:_stripFarDecorations(part: BasePart, d: any?)
+    self:_detachAmbientFX(part, d)
+    self:_detachOreGlow(part, d)
+    self:_detachShell(part, d)
+end
+
+function MiningRenderer:_isFillerOre(oreId: string): boolean
+    local def = OreLookup.getDef(oreId)
+    return (not def) or ((def.weight or 0) >= FILLER_WEIGHT)
+end
+
+-- Proximity: ambient-FX, glow и накидки (FOV-бюджет) от камеры/игрока.
+function MiningRenderer:_refreshBlockDecorations()
+    local camPos, camLook = self:_decorCameraBasis()
+    if not camPos then
+        return
+    end
+    if not camLook then
+        camLook = Vector3.new(0, 0, -1)
+    end
+    local origin = camPos
+
+    local activeFx = 0
+    local activeGlows = 0
+    local fxCandidates: { { key: string, part: BasePart, dist: number, oreId: string, rarity: string } } = {}
+    local glowCandidates: { { key: string, part: BasePart, dist: number, oreId: string } } = {}
+
+    for key, part in pairs(self._parts) do
+        local d = self._blockData[key]
+        if not d then continue end
+        local dist = (part.Position - origin).Magnitude
+
+        if dist > SHELL_RANGE + BS then
+            self:_stripFarDecorations(part, d)
+            continue
+        end
+
+        local rarity = OreLookup.getRarity(d.oreId)
+
+        local hasFx = part:FindFirstChild(AMBIENT_FX_HOLDER) ~= nil
+        if dist > AMBIENT_FX_RANGE then
+            if hasFx then self:_detachAmbientFX(part, d) end
+        elseif hasFx then
+            activeFx += 1
+            self:_ensureAmbientFXTinted(part, d.oreId)
+        elseif AMBIENT_FX_RARITY[rarity] then
+            table.insert(fxCandidates, { key = key, part = part, dist = dist, oreId = d.oreId, rarity = rarity })
+        end
+
+        local glowCfg = self:_resolveOreGlow(d.oreId)
+        local hasGlow = part:FindFirstChild("RarityGlow") ~= nil
+        if dist > SHELL_RANGE or not glowCfg then
+            if hasGlow then self:_detachOreGlow(part, d) end
+        elseif hasGlow then
+            activeGlows += 1
+            self:_syncOreGlow(part, d.oreId, glowCfg)
+        else
+            table.insert(glowCandidates, { key = key, part = part, dist = dist, oreId = d.oreId })
+        end
+    end
+
+    table.sort(fxCandidates, function(a, b) return a.dist < b.dist end)
+    for _, c in ipairs(fxCandidates) do
+        if activeFx >= MAX_AMBIENT_FX then break end
+        if self:_attachAmbientFX(c.part, c.oreId, c.rarity) then
+            local d = self._blockData[c.key]
+            if d then d.hasAmbientFX = true end
+            activeFx += 1
+        end
+    end
+    self._activeAmbientFX = activeFx
+
+    table.sort(glowCandidates, function(a, b) return a.dist < b.dist end)
+    for _, c in ipairs(glowCandidates) do
+        if activeGlows >= MAX_ORE_GLOWS then break end
+        if self:_attachOreGlow(c.part, c.oreId, self._blockData[c.key]) then
+            activeGlows += 1
+        end
+    end
+    self._activeGlows = activeGlows
+
+    self:_refreshVisibleShells(camPos, camLook)
+end
+
+function MiningRenderer:_createPart(x, z, y, oreId, hp, maxHp, mutation)
     PerfBeacon.bump("partsCreated")
     local key = string.format("%d_%d_%d", x, z, y)
     local part = Instance.new("Part")
     part.Name = key; part.Size = BSv; part.Anchored = true
+    part:SetAttribute("oreId", oreId)
     -- CastShadow=false: блоки под землёй, их тени не видны игроку, а ~2250+
     -- shadow-casting парт'ов — главный убийца FPS (shadowmap/voxel lighting
     -- считает тени для каждого). Все динамические FX тоже идут без теней.
     part.CanCollide = true; part.CanTouch = false; part.CastShadow = false
 
-    -- Low-poly блок: плоский материал (SmoothPlastic) + цвет руды с лёгким
-    -- джиттером. OreDef.material/reflectance всё ещё могут переопределить дефолт
-    -- (на будущее), но в данных они больше не задаются — всё плоское.
-    local rarity = OreLookup.getRarity(oreId)
-    local visual = ORE_VISUAL_BY_RARITY[rarity] or DEFAULT_VISUAL
-    local def = OreLookup.getDef(oreId)
-    local mat = visual.material
-    local refl = visual.reflectance
-    if def then
-        if def.material then mat = def.material end
-        if def.reflectance ~= nil then refl = def.reflectance end
+    local mutationTint = MutationLogic.tint(mutation)
+    if mutationTint then
+        -- P2.9: мутировавший блок светится своим оттенком прямо в стене —
+        -- это и есть «трейлерный» момент: игрок видит его издалека.
+        part:SetAttribute("mutation", mutation)
+        part.Color = mutationTint
+        part.Material = Enum.Material.Neon
+        part.Reflectance = 0.15
+        smoothSurfaces(part)
+    else
+        local decorDef = self:_decorDef(oreId)
+        if decorDef then
+            OreBlockDecor.applyHostStyle(part, decorDef)
+        else
+            part.Color = OreLookup.getColor(oreId)
+            part.Material = Enum.Material.SmoothPlastic
+            part.Reflectance = 0
+            smoothSurfaces(part)
+        end
     end
-
-    -- Не-наполнительные руды: куб становится тёмной «породой», а цвет руды несёт
-    -- накидка-меш сверху. darken применяем только если накидка влезет в кап.
-    local oreColor = OreLookup.getColor(oreId)
-    local isFiller = (not def) or ((def.weight or 0) >= FILLER_WEIGHT)
-    local willShell = (not isFiller) and self._activeProtrusions < MAX_PROTRUSIONS
-    local hostColor = if willShell then darkenColor(oreColor, 0.42) else oreColor
-    part.Color = jitterColor(hostColor)
-    part.Material = mat
-    part.Reflectance = refl
-    smoothSurfaces(part)
     part.Parent = self._parent
     local o = self:_mineOrigin()
     part.Position = Vector3.new(
@@ -981,66 +1374,13 @@ function MiningRenderer:_createPart(x, z, y, oreId, hp, maxHp)
         o.Y - (y * BS + BS / 2),
         o.Z + z * BS
     )
-    -- Клик/hover — один raycast (UserInputService + RenderStepped), не ClickDetector на каждый блок.
-
-    local rar = rarity
-    local rarColor = OreLookup.getRarityColor(oreId)
-    -- Rarity-плашка создаётся лениво (см. _ensureRarityTag), по умолчанию off.
-
-    -- Аура свечения epic+: PointLight цвета редкости. legendary/mythic — пульс.
-    -- Создаётся только под капом MAX_RARITY_GLOWS — иначе сотни лампочек в шахте.
-    local hasGlow = false
-    if visual.light and self._activeGlows < MAX_RARITY_GLOWS then
-        local glow = Instance.new("PointLight")
-        glow.Name = "RarityGlow"
-        glow.Color = rarColor
-        glow.Range = visual.light.range
-        glow.Brightness = visual.light.brightness
-        glow.Shadows = false
-        glow.Parent = part
-        if visual.pulse then
-            local pulseTween = TweenService:Create(
-                glow,
-                TweenInfo.new(0.9, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
-                { Brightness = visual.light.brightness * 0.45 }
-            )
-            pulseTween:Play()
-        end
-        self._activeGlows += 1
-        hasGlow = true
-    end
-
-    -- Sparkle-частицы цвета редкости (rare+). Размер/частота растут с rarity.
-    if visual.sparkleRate > 0 then
-        local sp = Instance.new("ParticleEmitter")
-        sp.Texture = "rbxasset://textures/particles/sparkle_main.dds"
-        sp.Color = ColorSequence.new(rarColor)
-        sp.LightEmission = 0.6
-        sp.Rate = visual.sparkleRate
-        sp.Lifetime = NumberRange.new(1.4, 3.0)
-        sp.Speed = NumberRange.new(0.2, 0.9)
-        sp.SpreadAngle = Vector2.new(45, 45)
-        sp.VelocityInheritance = 0
-        sp.Enabled = true
-        sp.Transparency = NumberSequence.new({
-            NumberSequenceKeypoint.new(0, 0.2),
-            NumberSequenceKeypoint.new(1, 1),
-        })
-        sp.Size = NumberSequence.new({
-            NumberSequenceKeypoint.new(0, (rar == "mythic" or rar == "legendary") and 0.6 or 0.4),
-            NumberSequenceKeypoint.new(1, 0),
-        })
-        sp.Parent = part
-    end
-
-    -- Накидка-меш для всех не-наполнительных руд (на открытой грани, цвет руды).
-    local hasProtrusion = false
-    if not isFiller then
-        hasProtrusion = self:_addShell(part, x, z, y, oreId, rarity)
-    end
+    -- PointLight и AmbientFX — в _refreshBlockDecorations (proximity, как на стенде).
 
     self._parts[key] = part
-    self._blockData[key] = { oreId = oreId, hp = hp, maxHp = maxHp, hasGlow = hasGlow, hasProtrusion = hasProtrusion }
+    self._blockData[key] = {
+        oreId = oreId, hp = hp, maxHp = maxHp, mutation = mutation,
+        hasGlow = false, hasShell = false, hasAmbientFX = false,
+    }
 
     -- Если плашки редкости включены глобально (/rarity), показать её и на
     -- свежесозданном блоке (например, пришедшем delta'ой).
@@ -1058,8 +1398,14 @@ function MiningRenderer:_destroyPart(key)
     end
     local d = self._blockData[key]
     if d and d.hasGlow then self._activeGlows = math.max(0, self._activeGlows - 1) end
-    if d and d.hasProtrusion then self._activeProtrusions = math.max(0, self._activeProtrusions - 1) end
-    local p = self._parts[key]; if p then p:Destroy(); self._parts[key] = nil; self._blockData[key] = nil end
+    if d and d.hasShell then self._activeShells = math.max(0, self._activeShells - 1) end
+    local bx, bz, by = parseKey(key)
+    self:_reconcileNeighborShells(bx, bz, by)
+    local p = self._parts[key]
+    if p and p:FindFirstChild(AMBIENT_FX_HOLDER) then
+        self._activeAmbientFX = math.max(0, self._activeAmbientFX - 1)
+    end
+    if p then p:Destroy(); self._parts[key] = nil; self._blockData[key] = nil end
 end
 
 function MiningRenderer:_updateVisual(key, hp)
@@ -1080,6 +1426,7 @@ end
 function MiningRenderer:_breakEffect(key, oreId)
     local p = self._parts[key]; if not p then return end
     local pos = p.Position
+    local def = OreLookup.getDef(oreId)
     local oreColor = OreLookup.getColor(oreId)
     local rarity = OreLookup.getRarity(oreId)
     local rarityColor = OreLookup.getRarityColor(oreId)
@@ -1101,7 +1448,21 @@ function MiningRenderer:_breakEffect(key, oreId)
         elseif rarity == "legendary" then 1.4
         elseif rarity == "epic" then 1.2
         else 1.0
-    dustCloud(dustHost, oreColor, BREAK_DUST_COUNT[rarity] or 8, dustScale)
+    local layerDust = def and LayerProfile.IDENTITY[def.layer]
+    if layerDust and layerDust.breakDust then
+        local bd = layerDust.breakDust
+        dustScale *= bd.scaleMul or 1
+    end
+    local dustColor = oreColor
+    local dustEmission = 0
+    local dustCount = BREAK_DUST_COUNT[rarity] or 8
+    if layerDust and layerDust.breakDust then
+        local bd = layerDust.breakDust
+        if bd.tint then dustColor = oreColor:Lerp(bd.tint, 0.4) end
+        dustEmission = bd.lightEmission or 0
+        dustCount = math.floor(dustCount * (bd.countMul or 1))
+    end
+    dustCloud(dustHost, dustColor, dustCount, dustScale, dustEmission)
     Debris:AddItem(dustHost, 2.5)
 
     -- 3. Shockwave-сфера ЦВЕТА РЕДКОСТИ для rare+. Локальный взрыв в точке,
@@ -1164,15 +1525,12 @@ function MiningRenderer:_animateDestroy(key)
     local cf = p.CFrame
     TweenService:Create(p, TweenInfo.new(0.25, Enum.EasingStyle.Quint), { Size = Vector3.new(0.1, 0.1, 0.1), Transparency = 0.8 }):Play()
     TweenService:Create(p, TweenInfo.new(0.25, Enum.EasingStyle.Quint), { CFrame = cf * CFrame.new(0, -BS/2, 0) }):Play()
-    -- Накидка — отдельный part (не следует за Size/CFrame блока), анимируем её
-    -- синхронно: проседает вниз + растворяется, иначе висит до уничтожения блока.
-    local shell = p:FindFirstChild("OreShell")
-    if shell and shell:IsA("BasePart") then
+    self:_forEachShellFace(p, function(shell)
         TweenService:Create(shell, TweenInfo.new(0.25, Enum.EasingStyle.Quint), {
             Transparency = 1,
             CFrame = shell.CFrame + Vector3.new(0, -BS / 2, 0),
         }):Play()
-    end
+    end)
     -- Гард: если за 0.3 с по тому же ключу появится НОВЫЙ part (replace
     -- через delta), не сносить его — сверяемся по конкретному инстансу.
     -- Старый part всё равно убираем, чтобы не оставить мусор в workspace.
@@ -1323,14 +1681,15 @@ end
     данные на месте (последнее состояние сервера побеждает). Реальное создание
     происходит в _drainCreateQueue по бюджету на кадр.
 ]]
-function MiningRenderer:_queueCreate(key, x, z, y, oreId, hp, maxHp)
+function MiningRenderer:_queueCreate(key, x, z, y, oreId, hp, maxHp, mutation)
     local existing = self._createPending[key]
     if existing then
         existing.x, existing.z, existing.y = x, z, y
         existing.oreId, existing.hp, existing.maxHp = oreId, hp, maxHp
+        existing.mutation = mutation
         return
     end
-    local entry = { key = key, x = x, z = z, y = y, oreId = oreId, hp = hp, maxHp = maxHp }
+    local entry = { key = key, x = x, z = z, y = y, oreId = oreId, hp = hp, maxHp = maxHp, mutation = mutation }
     self._createPending[key] = entry
     self._createQueue[#self._createQueue + 1] = entry
 end
@@ -1353,6 +1712,18 @@ function MiningRenderer:_drainCreateQueue()
     local n = #q
     local head = self._createHead
     if head > n then return end
+    -- Гейт: шахта кладётся относительно MineZoneMarker. Пока маркер не
+    -- реплицировался/не стримнулся — НЕ создаём блоки (иначе закэшируем фоллбэк
+    -- и шахта уедет из зоны). Блоки остаются в очереди до появления маркера.
+    -- После таймаута — фоллбэк, чтобы шахта не зависла невидимой навсегда.
+    if not self._origin and self:_resolveOrigin() == nil then
+        if os.clock() >= self._originDeadline then
+            self._origin = self:_fallbackOrigin()
+            self._log:warn("MineZoneMarker не найден за", ORIGIN_WAIT_TIMEOUT, "с — шахта на фоллбэк-точке")
+        else
+            return -- ждём маркер, блоки остаются в очереди
+        end
+    end
     local drainT0 = os.clock()
     local budget = CREATE_BUDGET_PER_FRAME
     local created = 0
@@ -1364,7 +1735,7 @@ function MiningRenderer:_drainCreateQueue()
             self._createPending[entry.key] = nil
             if not self._parts[entry.key] then
                 local t0 = os.clock()
-                self:_createPart(entry.x, entry.z, entry.y, entry.oreId, entry.hp, entry.maxHp)
+                self:_createPart(entry.x, entry.z, entry.y, entry.oreId, entry.hp, entry.maxHp, entry.mutation)
                 local ms = (os.clock() - t0) * 1000
                 PERF.createPartCount += 1
                 PERF.createPartMsSum += ms
@@ -1378,10 +1749,15 @@ function MiningRenderer:_drainCreateQueue()
     if head > n then -- очередь исчерпана — сбрасываем буфер
         self._createQueue = {}
         self._createHead = 1
+        self:_refreshBlockDecorations()
     end
     local drainMs = (os.clock() - drainT0) * 1000
     if drainMs > PERF.drainMsMax then PERF.drainMsMax = drainMs end
     if created > 0 then perfPublish() end
+    -- FX навешивает периодический таймер (_ambientFxConn, раз в AMBIENT_FX_TICK).
+    -- НЕ дёргаем _refreshAmbientFX здесь: при загрузке снапшота (2250 блоков по
+    -- 25/кадр = ~90 дренажей) это давало сотни тысяч лишних итераций в момент,
+    -- когда кадр и так перегружен созданием блоков.
 end
 
 --[[
@@ -1393,11 +1769,21 @@ function MiningRenderer:applySnapshot(blocks)
     PerfBeacon.bump("snapshotCalls")
     perfPublish()
     self._log:debug("Snapshot:", #blocks, "blocks")
-    for k, _ in pairs(self._parts) do self:_destroyPart(k) end
+    -- Нельзя pairs+_destroyPart в одном цикле: destroy удаляет ключ из _parts.
+    local keys: { string } = {}
+    for k in pairs(self._parts) do
+        table.insert(keys, k)
+    end
+    for _, k in ipairs(keys) do
+        self:_destroyPart(k)
+    end
+    self._activeGlows = 0
+    self._activeShells = 0
+    self._activeAmbientFX = 0
     self:_clearCreateQueue()
     for _, b in ipairs(blocks) do
         local x, z, y = parseKey(b.key)
-        self:_queueCreate(b.key, x, z, y, b.oreId, b.hp, b.maxHp)
+        self:_queueCreate(b.key, x, z, y, b.oreId, b.hp, b.maxHp, b.mutation)
     end
 end
 
@@ -1439,7 +1825,7 @@ function MiningRenderer:applyDelta(delta)
             self:_destroyPart(b.key)
         end
         local x, z, y = parseKey(b.key)
-        self:_queueCreate(b.key, x, z, y, b.oreId, b.hp, b.maxHp)
+        self:_queueCreate(b.key, x, z, y, b.oreId, b.hp, b.maxHp, b.mutation)
     end
     for _, u in ipairs(delta.updated or {}) do
         local pending = self._createPending[u.key]
@@ -1498,9 +1884,22 @@ function MiningRenderer:toggleHPBar()
     return self._showHPBar
 end
 
+function MiningRenderer:_refreshMineRaycastSanitize()
+    local result = MineZoneWorkspace.sanitize(workspace)
+    self._minePlatformExcludes = result.raycastExcludes
+    self._obstacleRayFilter = nil
+end
+
 function MiningRenderer:start()
     self._enabled = true
+    self:_refreshMineRaycastSanitize()
+    task.defer(function()
+        if self._enabled and not self:_isStale() then
+            self:_refreshMineRaycastSanitize()
+        end
+    end)
     self._origin = nil -- перечитать зону MineZoneMarker после респавна
+    self._originDeadline = os.clock() + ORIGIN_WAIT_TIMEOUT
     -- Захватываем поколение ДО создания папки: новый активный renderer, любой
     -- старый автоматически считается stale и выключится на следующем тике.
     local gen = ((_G :: any).DD_RENDER_GEN or 0) + 1
@@ -1534,7 +1933,8 @@ function MiningRenderer:stop()
     self:_teardownInput()
     self:_destroyCursorLight()
     for _, p in pairs(self._parts) do p:Destroy() end
-    self._parts = {}; self._blockData = {}; self._activeGlows = 0; self._activeProtrusions = 0
+    self._parts = {}; self._blockData = {}
+    self._activeGlows = 0; self._activeShells = 0; self._activeAmbientFX = 0
     self:_clearCreateQueue()
     if self._parent then self._parent:Destroy(); self._parent = nil end
 end

@@ -120,6 +120,8 @@ local DEFAULT_DATA = {
     --     синкает на onProfileLoaded и на PromptGamePassPurchaseFinished.
     --     Template-мердж добавит {} старым профилям без миграции.
     gamepasses = {},
+    -- Одноразовые покупки из магазина (starterPack и т.п.).
+    shopPurchases = {},
     -- Phase 13 (Ore Discovery Index — журнал находок).
     --   discoveredOres: { [oreId] = true } — найденные руды. Переживает ребёрт
     --     (коллекция-история). Template-мердж добавит {} старым профилям;
@@ -131,6 +133,26 @@ local DEFAULT_DATA = {
     claimedQuests = {},
     -- Достижения: unlockedAchievements[id]=true.
     unlockedAchievements = {},
+    -- Титул под ником: id разблокированного достижения; nil = авто (по ребёртам).
+    equippedTitleId = nil,
+    -- P1.5: повторяемые ежедневные задания. Сбрасываются каждый UTC-день
+    -- (DailyQuestLogic.ensureReset): baseline переснимается, claimed очищается.
+    --   yday/year: ключ дня последнего сброса.
+    --   baseline: снимок кумулятивных счётчиков на начало дня (для дельты).
+    --   claimed: { [questId] = true } — забранные сегодня награды.
+    dailyQuests = {
+        yday = 0,
+        year = 0,
+        baseline = {},
+        claimed = {},
+    },
+    -- Промокоды: redeemedCodes[CODE_UPPER] = true после активации.
+    redeemedCodes = {},
+    -- Соц-награда (группа + избранное).
+    socialRewardClaimed = false,
+    socialRewardPromptSeen = false,
+    -- Honor-system: клиент ставит true после PromptSetFavorite (сервер не проверяет).
+    socialFavoriteConfirmed = false,
 }
 
 -- Создать ProfileStore

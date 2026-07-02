@@ -12,6 +12,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local shared = ReplicatedStorage:WaitForChild("shared")
 local Constants = require(shared.constants)
+local LayerProfile = require(shared.data.LayerProfile)
 local LayerUtil = require(shared.util.LayerUtil)
 local Logger = require(shared.util.Logger)
 
@@ -85,6 +86,7 @@ function LayerEnvironment:apply(layerId: string)
             Ambient = dim(bg, 0.55),
             OutdoorAmbient = dim(bg, 0.35),
             FogColor = dim(bg, 0.25),
+            FogStart = light.fogStart or 0,
             FogEnd = light.fogEnd,
             Brightness = light.brightness,
             ClockTime = light.clockTime,
@@ -100,6 +102,8 @@ function LayerEnvironment:apply(layerId: string)
             self._atmosphereTween:Cancel()
             self._atmosphereTween = nil
         end
+        local profile = LayerProfile.IDENTITY[layerId]
+        local glare = if profile and profile.atmosphereGlare then profile.atmosphereGlare else 0
         self._atmosphereTween = TweenService:Create(
             atmo,
             TweenInfo.new(TWEEN_DURATION, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
@@ -108,6 +112,7 @@ function LayerEnvironment:apply(layerId: string)
                 Haze = light.atmosphereHaze,
                 Color = dim(bg, 0.6),
                 Decay = dim(bg, 0.4),
+                Glare = glare,
             }
         )
         self._atmosphereTween:Play()

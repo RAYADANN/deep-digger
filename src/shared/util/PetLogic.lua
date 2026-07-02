@@ -20,7 +20,9 @@
 --
 -- API:
 --   PetLogic.maxEquipped()                       -> number
---   PetLogic.rollHatch(rng?)                      -> petId (weighted random)
+--   PetLogic.getEggPool(eggId)                   -> { petId, weight }[]
+--   PetLogic.getHatchOdds(eggId)                 -> { petId, rarity, percent, weight }[]
+--   PetLogic.rollHatch(eggId?, rng?)             -> petId (weighted random из пула яйца)
 --   PetLogic.getEquippedUids(data)               -> { string }
 --   PetLogic.getEquippedPets(data)               -> { Pet }  (def'ы из PetDatabase)
 --   PetLogic.damageMultiplier(data)              -> number  (1 + Σ damageBoost)
@@ -35,10 +37,14 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local shared = ReplicatedStorage:WaitForChild("shared")
 local Constants = require(shared.constants)
 local PetDatabase = require(shared.data.PetDatabase)
+local EggPoolDatabase = require(shared.data.EggPoolDatabase)
 -- Phase 12: gamepass «+2 pet slots» расширяет maxEquipped. MonetizationLogic
 -- читает только Constants + playerData.gamepasses → циклической зависимости с
 -- PetLogic нет (MonetizationLogic про петов не знает).
 local MonetizationLogic = require(shared.util.MonetizationLogic)
+-- P1.4: ребёрт открывает доп. слоты петов (RebirthLogic.petSlotBonus).
+-- RebirthLogic зависит только от Constants → цикла с PetLogic нет.
+local RebirthLogic = require(shared.util.RebirthLogic)
 
 local PetLogic = {}
 
@@ -59,66 +65,102 @@ function PetLogic.maxEquipped(data: any?): number
     local base = math.max(1, math.floor(cfg().maxEquipped or 1))
     if data then
         base += MonetizationLogic.petSlotBonus(data)
+        base += RebirthLogic.petSlotBonus(data.rebirths or 0)
     end
     return base
 end
 
+local RARITY_SORT_ORDER = { common = 1, uncommon = 2, rare = 3, epic = 4, legendary = 5, mythic = 6 }
+
+export type EggPoolEntry = EggPoolDatabase.PoolEntry
+
+export type HatchOddEntry = {
+    petId: string,
+    rarity: string,
+    name: string,
+    percent: number,
+    weight: number,
+}
+
 --[[
-    Weighted random hatch из Basic Egg. Сначала по весам rarity
-    (Constants.PETS.basicEggWeights), потом равновероятно внутри пула этой
-    rarity (PetDatabase.getByRarity). Если пул пуст — спускаемся к common.
-    `rng` опционален (для детерминированных тестов) — функция, возвращающая
-    [0,1). По умолчанию math.random.
-    Возвращает petId.
+    Пул питомцев конкретного яйца. Неизвестный eggId → basic.
 ]]
-function PetLogic.rollHatch(rng: (() -> number)?): string
+function PetLogic.getEggPool(eggId: string): { EggPoolEntry }
+    return EggPoolDatabase.getPool(eggId)
+end
+
+--[[
+    Нормализованные шансы выпадения каждого питомца в яйце (клиент + сервер).
+    percent — доля 0..100, округление на стороне UI.
+]]
+function PetLogic.getHatchOdds(eggId: string): { HatchOddEntry }
+    local pool = PetLogic.getEggPool(eggId)
+    local total = 0
+    for _, entry in ipairs(pool) do
+        total += math.max(0, entry.weight)
+    end
+
+    local result: { HatchOddEntry } = {}
+    for _, entry in ipairs(pool) do
+        local w = math.max(0, entry.weight)
+        if w > 0 then
+            local def = PetDatabase.get(entry.petId)
+            if def then
+                table.insert(result, {
+                    petId = entry.petId,
+                    rarity = def.rarity,
+                    name = def.name,
+                    percent = if total > 0 then (w / total) * 100 else 0,
+                    weight = w,
+                })
+            end
+        end
+    end
+
+    table.sort(result, function(a, b)
+        local ra = RARITY_SORT_ORDER[a.rarity] or 99
+        local rb = RARITY_SORT_ORDER[b.rarity] or 99
+        if ra ~= rb then
+            return ra < rb
+        end
+        if a.percent ~= b.percent then
+            return a.percent > b.percent
+        end
+        return a.petId < b.petId
+    end)
+
+    return result
+end
+
+--[[
+    Weighted random hatch из пула яйца eggId.
+    `rng` опционален (для детерминированных тестов) — функция [0,1).
+]]
+function PetLogic.rollHatch(eggId: string?, rng: (() -> number)?): string
     local random = rng or math.random
-    local weights = cfg().basicEggWeights or {}
-    -- Порядок rarity от редкого к частому для устойчивого обхода.
-    local order = { "mythic", "legendary", "epic", "rare", "uncommon", "common" }
+    local pool = PetLogic.getEggPool(eggId or "basic")
 
     local total = 0
-    for _, rarity in ipairs(order) do
-        total += math.max(0, weights[rarity] or 0)
+    for _, entry in ipairs(pool) do
+        total += math.max(0, entry.weight)
     end
     if total <= 0 then
-        -- Деградация: равные шансы по присутствующим rarity.
-        total = #order
+        return "pebble_pup"
     end
 
     local r = random() * total
     local acc = 0
-    local chosenRarity = "common"
-    for _, rarity in ipairs(order) do
-        acc += math.max(0, weights[rarity] or 0)
-        if r <= acc then
-            chosenRarity = rarity
-            break
-        end
-    end
-
-    -- Выбираем пета из пула выпавшей rarity; если пуст — спускаемся ниже.
-    local fallback = { "epic", "rare", "uncommon", "common" }
-    local pool = PetDatabase.getByRarity(chosenRarity)
-    if #pool == 0 then
-        for _, rarity in ipairs(fallback) do
-            pool = PetDatabase.getByRarity(rarity)
-            if #pool > 0 then
-                break
+    for _, entry in ipairs(pool) do
+        local w = math.max(0, entry.weight)
+        if w > 0 then
+            acc += w
+            if r <= acc then
+                return entry.petId
             end
         end
     end
-    if #pool == 0 then
-        -- Совсем пусто (мисконфиг БД) — берём первого попавшегося.
-        local all = PetDatabase.getAll()
-        if #all > 0 then
-            return all[1].id
-        end
-        return "pebble_pup"
-    end
-    local idx = math.floor(random() * #pool) + 1
-    idx = math.clamp(idx, 1, #pool)
-    return pool[idx].id
+
+    return pool[#pool].petId
 end
 
 --[[

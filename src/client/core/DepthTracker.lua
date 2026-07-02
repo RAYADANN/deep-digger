@@ -12,6 +12,7 @@ export type DepthInfo = {
     depth: number,
     layerId: string,
     layerName: string,
+    layerChanged: boolean,
 }
 
 export type Listener = (info: DepthInfo) -> ()
@@ -27,6 +28,7 @@ function DepthTracker.new(player: Player)
     self._log = Logger.new("DepthTracker")
     self._listener = nil :: Listener?
     self._lastDepth = -1
+    self._lastLayerId = ""
     self._connection = nil :: RBXScriptConnection?
     self._accumulator = 0
     return self
@@ -42,10 +44,13 @@ function DepthTracker:_emit(depth: number)
     end
     local layer = LayerUtil.layerFromDepth(depth)
     local layerId, layerName = layer.id, layer.name
+    local layerChanged = layerId ~= self._lastLayerId
+    self._lastLayerId = layerId
     self._listener({
         depth = depth,
         layerId = layerId,
         layerName = layerName,
+        layerChanged = layerChanged,
     })
 end
 
@@ -76,7 +81,17 @@ function DepthTracker:start()
     self:stop()
     self._accumulator = 0
     self._lastDepth = -1
+    self._lastLayerId = ""
     self._log:info("DepthTracker started")
+
+    task.defer(function()
+        local root = self:_findRoot()
+        if root then
+            local depth = LayerUtil.depthFromY(root.Position.Y)
+            self._lastDepth = depth - 1
+            self:_emit(depth)
+        end
+    end)
 
     self._connection = RunService.Heartbeat:Connect(function(dt)
         self._accumulator += dt

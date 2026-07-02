@@ -25,11 +25,18 @@ local ScopeFactory = require(script.Parent.Parent.ScopeFactory)
 local HudStateModule = require(script.Parent.Parent.HudState)
 local theme = require(script.Parent.Parent.theme)
 local LeaderRow = require(script.Parent.Parent.components.LeaderRow)
+local UiIcon = require(script.Parent.Parent.components.UiIcon)
+local PanelScale = require(script.Parent.Parent.PanelScale)
+local UiAssets = require(ReplicatedStorage:WaitForChild("shared").data.UiAssets)
 
 local OnEvent = Fusion.OnEvent
 local Children = Fusion.Children
 local peek = Fusion.peek
 local C = theme.C
+-- Десктоп: геометрия ×2 синхронно с ×2 текстом (gsc). Phone/tablet без изменений.
+local sc = PanelScale.gsc
+local text = PanelScale.text
+local tsize = PanelScale.tsize
 
 local LeaderboardPanel = {}
 
@@ -39,16 +46,16 @@ local REFRESH_INTERVAL = (Constants.LEADERBOARD or {}).refreshIntervalSeconds or
 local function skeletonRow(s: ScopeFactory.HudScope, index: number)
     return s:New("Frame")({
         Name = "Skeleton_" .. index,
-        Size = UDim2.new(1, -8, 0, 44),
+        Size = UDim2.new(1, -sc(8), 0, sc(44)),
         BackgroundColor3 = C.btnBg,
         BackgroundTransparency = 0.3,
         BorderSizePixel = 0,
         [Children] = {
-            s:New("UICorner")({ CornerRadius = UDim.new(0, 6) }),
+            s:New("UICorner")({ CornerRadius = UDim.new(0, sc(6)) }),
             -- Серый skeleton-круг под аватар.
             s:New("Frame")({
-                Size = UDim2.fromOffset(32, 32),
-                Position = UDim2.new(0, 52, 0.5, -16),
+                Size = UDim2.fromOffset(sc(32), sc(32)),
+                Position = UDim2.new(0, sc(52), 0.5, -sc(16)),
                 BackgroundColor3 = Color3.fromRGB(60, 60, 90),
                 BackgroundTransparency = 0.3,
                 BorderSizePixel = 0,
@@ -57,13 +64,13 @@ local function skeletonRow(s: ScopeFactory.HudScope, index: number)
                 },
             }),
             s:New("Frame")({
-                Size = UDim2.new(0.5, 0, 0, 12),
-                Position = UDim2.new(0, 96, 0.5, -6),
+                Size = UDim2.new(0.5, 0, 0, sc(12)),
+                Position = UDim2.new(0, sc(96), 0.5, -sc(6)),
                 BackgroundColor3 = Color3.fromRGB(70, 70, 100),
                 BackgroundTransparency = 0.4,
                 BorderSizePixel = 0,
                 [Children] = {
-                    s:New("UICorner")({ CornerRadius = UDim.new(0, 4) }),
+                    s:New("UICorner")({ CornerRadius = UDim.new(0, sc(4)) }),
                 },
             }),
         },
@@ -79,7 +86,10 @@ local function spotlightCard(s: ScopeFactory.HudScope, entryValue: any, boardId:
     -- entryValue — Value<Entry?>
     return s:New("Frame")({
         Name = "Spotlight",
-        Size = UDim2.new(1, -8, 0, 72),
+        -- Под хедером (header h=sc(32) + зазор sc(4)). Без явной позиции карточка
+        -- ложилась в (0,0) и перекрывала хедер.
+        Size = UDim2.new(1, -sc(8), 0, sc(72)),
+        Position = UDim2.new(0, 0, 0, sc(36)),
         BackgroundColor3 = C.goldBg,
         BackgroundTransparency = 0.05,
         BorderSizePixel = 0,
@@ -87,38 +97,38 @@ local function spotlightCard(s: ScopeFactory.HudScope, entryValue: any, boardId:
             return use(entryValue) ~= nil
         end),
         [Children] = {
-            s:New("UICorner")({ CornerRadius = UDim.new(0, 10) }),
-            s:New("UIStroke")({ Color = C.gold, Thickness = 2.5, Transparency = 0.1 }),
+            s:New("UICorner")({ CornerRadius = UDim.new(0, sc(10)) }),
+            s:New("UIStroke")({ Color = C.gold, Thickness = sc(theme.STROKE.thick), Transparency = 0.1 }),
             -- Корона над всем рядом.
-            s:New("TextLabel")({
-                Size = UDim2.new(1, -16, 0, 18),
-                Position = UDim2.new(0, 8, 0, 6),
-                BackgroundTransparency = 1,
-                Text = "👑 #1 ВО ВСЁМ МИРЕ",
-                TextSize = 12,
-                Font = Enum.Font.GothamBlack,
-                TextColor3 = C.gold,
-                TextXAlignment = Enum.TextXAlignment.Center,
+            UiIcon.titleRow(s, {
+                source = "icon_crown",
+                text = "#1 ВО ВСЁМ МИРЕ",
+                textSize = sc(12),
+                font = Enum.Font.GothamBlack,
+                textColor = C.gold,
+                size = UDim2.new(1, -sc(16), 0, sc(18)),
+                position = UDim2.new(0, sc(8), 0, sc(6)),
+                iconSize = sc(16),
             }),
             -- Имя + value.
             s:New("TextLabel")({
-                Size = UDim2.new(1, -16, 0, 22),
-                Position = UDim2.new(0, 8, 0, 26),
+                Size = UDim2.new(1, -sc(16), 0, sc(22)),
+                Position = UDim2.new(0, sc(8), 0, sc(26)),
                 BackgroundTransparency = 1,
                 Text = s:Computed(function(use)
                     local e = use(entryValue)
                     if not e then return "—" end
                     return e.name
                 end),
-                TextSize = 18,
+                TextSize = tsize(18),
                 Font = Enum.Font.GothamBlack,
                 TextColor3 = C.textMain,
                 TextXAlignment = Enum.TextXAlignment.Left,
                 TextTruncate = Enum.TextTruncate.AtEnd,
             }),
             s:New("TextLabel")({
-                Size = UDim2.new(1, -16, 0, 22),
-                Position = UDim2.new(0, 8, 0, 48),
+                Size = UDim2.new(1, -sc(16), 0, sc(22)),
+                Position = UDim2.new(0, sc(8), 0, sc(48)),
                 BackgroundTransparency = 1,
                 Text = s:Computed(function(use)
                     local e = use(entryValue)
@@ -126,7 +136,7 @@ local function spotlightCard(s: ScopeFactory.HudScope, entryValue: any, boardId:
                     local id = use(boardId)
                     return LeaderboardLogic.formatValue(id, e.value)
                 end),
-                TextSize = 16,
+                TextSize = tsize(16),
                 Font = Enum.Font.GothamBold,
                 TextColor3 = C.gold,
                 TextXAlignment = Enum.TextXAlignment.Right,
@@ -135,28 +145,42 @@ local function spotlightCard(s: ScopeFactory.HudScope, entryValue: any, boardId:
     })
 end
 
-local function toggleButton(s: ScopeFactory.HudScope, label: string, id: string, currentBoardId: any)
+local function toggleButton(s: ScopeFactory.HudScope, label: string, iconKey: string, id: string, currentBoardId: any)
     return s:New("TextButton")({
-        Size = UDim2.new(0.5, -4, 1, 0),
+        Size = UDim2.new(0.5, -sc(4), 1, 0),
         BackgroundColor3 = s:Computed(function(use)
             return use(currentBoardId) == id and C.gem or C.btnBg
         end),
         BorderSizePixel = 0,
         AutoButtonColor = false,
-        Text = label,
-        TextSize = 13,
-        Font = Enum.Font.GothamBold,
-        TextColor3 = s:Computed(function(use)
-            return use(currentBoardId) == id and C.textMain or C.textLabel
-        end),
+        Text = "",
         [Children] = {
-            s:New("UICorner")({ CornerRadius = UDim.new(0, 6) }),
+            s:New("UICorner")({ CornerRadius = UDim.new(0, sc(6)) }),
             s:New("UIStroke")({
                 Color = s:Computed(function(use)
                     return use(currentBoardId) == id and C.gem or C.btnBorder
                 end),
-                Thickness = 1.2,
+                Thickness = sc(theme.STROKE.thin),
                 Transparency = 0.4,
+            }),
+            s:New("ImageLabel")({
+                Size = UDim2.fromOffset(sc(16), sc(16)),
+                Position = UDim2.new(0.5, -sc(36), 0.5, -sc(8)),
+                BackgroundTransparency = 1,
+                Image = UiAssets.image(iconKey :: any),
+                ScaleType = Enum.ScaleType.Fit,
+            }),
+            s:New("TextLabel")({
+                Size = UDim2.new(1, -sc(40), 1, 0),
+                Position = UDim2.new(0, sc(28), 0, 0),
+                BackgroundTransparency = 1,
+                Text = label,
+                TextSize = text(13),
+                Font = Enum.Font.GothamBold,
+                TextColor3 = s:Computed(function(use)
+                    return use(currentBoardId) == id and C.textMain or C.textLabel
+                end),
+                TextXAlignment = Enum.TextXAlignment.Left,
             }),
         },
         [OnEvent("Activated")] = function()
@@ -316,44 +340,44 @@ function LeaderboardPanel.create(s: ScopeFactory.HudScope, state: HudStateModule
         Visible = visible,
         [Children] = {
             s:New("UIPadding")({
-                PaddingTop = UDim.new(0, 4),
-                PaddingLeft = UDim.new(0, 4),
-                PaddingRight = UDim.new(0, 4),
-                PaddingBottom = UDim.new(0, 8),
+                PaddingTop = PanelScale.pad(4),
+                PaddingLeft = PanelScale.pad(4),
+                PaddingRight = PanelScale.pad(4),
+                PaddingBottom = PanelScale.pad(8),
             }),
             -- Header: toggle + countdown.
             s:New("Frame")({
                 Name = "Header",
-                Size = UDim2.new(1, -8, 0, 32),
+                Size = UDim2.new(1, -sc(8), 0, sc(32)),
                 BackgroundTransparency = 1,
                 [Children] = {
                     s:New("Frame")({
                         -- Toggle group.
-                        Size = UDim2.new(0, 220, 1, 0),
+                        Size = UDim2.new(0, sc(220), 1, 0),
                         Position = UDim2.new(0, 0, 0, 0),
                         BackgroundTransparency = 1,
                         [Children] = {
                             s:New("UIListLayout")({
                                 FillDirection = Enum.FillDirection.Horizontal,
-                                Padding = UDim.new(0, 8),
+                                Padding = PanelScale.pad(8),
                                 SortOrder = Enum.SortOrder.LayoutOrder,
                             }),
-                            toggleButton(s, "💰 Монеты", "coins", boardId),
-                            toggleButton(s, "⬇ Глубина", "depth", boardId),
+                            toggleButton(s, "Монеты", "coin", "coins", boardId),
+                            toggleButton(s, "Глубина", "depth", "depth", boardId),
                         },
                     }),
                     -- Countdown.
                     s:New("TextLabel")({
-                        Size = UDim2.new(0, 200, 1, 0),
-                        Position = UDim2.new(1, -200, 0, 0),
+                        Size = UDim2.new(0, sc(200), 1, 0),
+                        Position = UDim2.new(1, -sc(200), 0, 0),
                         BackgroundTransparency = 1,
                         Text = s:Computed(function(use)
                             local err = use(errorText)
                             if err then return err end
                             local s2 = math.max(0, math.floor(use(secondsUntilRefresh) or 0))
-                            return ("⏱ Обновится через %dс"):format(s2)
+                            return ("Обновится через %dс"):format(s2)
                         end),
-                        TextSize = 11,
+                        TextSize = text(11),
                         Font = Enum.Font.Gotham,
                         TextColor3 = s:Computed(function(use)
                             return if use(errorText) then C.mythic else C.textMuted
@@ -367,18 +391,18 @@ function LeaderboardPanel.create(s: ScopeFactory.HudScope, state: HudStateModule
             -- ScrollingFrame с остальными.
             s:New("ScrollingFrame")({
                 Name = "Rows",
-                Size = UDim2.new(1, -8, 1, -150),
-                Position = UDim2.new(0, 0, 0, 120),
+                Size = UDim2.new(1, -sc(8), 1, -sc(150)),
+                Position = UDim2.new(0, 0, 0, sc(120)),
                 BackgroundTransparency = 1,
                 BorderSizePixel = 0,
-                ScrollBarThickness = 5,
+                ScrollBarThickness = PanelScale.scrollBar(),
                 ScrollBarImageColor3 = C.panelBorder,
                 CanvasSize = UDim2.new(0, 0, 0, 0),
                 AutomaticCanvasSize = Enum.AutomaticSize.Y,
                 [Children] = {
                     s:New("UIListLayout")({
                         FillDirection = Enum.FillDirection.Vertical,
-                        Padding = UDim.new(0, 4),
+                        Padding = PanelScale.pad(4),
                         SortOrder = Enum.SortOrder.LayoutOrder,
                     }),
                     -- Dynamic rows. По паттерну InventoryPanel.lua — Computed
@@ -400,7 +424,7 @@ function LeaderboardPanel.create(s: ScopeFactory.HudScope, state: HudStateModule
                     end),
                     -- Loading skeleton — рендерим если isLoading и нет ни одной строки.
                     s:New("Frame")({
-                        Size = UDim2.new(1, -8, 0, 200),
+                        Size = UDim2.new(1, -sc(8), 0, sc(200)),
                         BackgroundTransparency = 1,
                         Visible = s:Computed(function(use)
                             return use(isLoading)
@@ -408,7 +432,7 @@ function LeaderboardPanel.create(s: ScopeFactory.HudScope, state: HudStateModule
                         [Children] = {
                             s:New("UIListLayout")({
                                 FillDirection = Enum.FillDirection.Vertical,
-                                Padding = UDim.new(0, 4),
+                                Padding = PanelScale.pad(4),
                             }),
                             skeletonRow(s, 1),
                             skeletonRow(s, 2),
@@ -418,26 +442,33 @@ function LeaderboardPanel.create(s: ScopeFactory.HudScope, state: HudStateModule
                         },
                     }),
                     -- Empty state.
-                    s:New("TextLabel")({
-                        Size = UDim2.new(1, -8, 0, 60),
+                    s:New("Frame")({
+                        Size = UDim2.new(1, -sc(8), 0, sc(60)),
                         BackgroundTransparency = 1,
-                        Text = "🏆 Будь первым в лидерборде!",
-                        TextSize = 14,
-                        Font = Enum.Font.GothamBold,
-                        TextColor3 = C.textLabel,
                         Visible = s:Computed(function(use)
                             if use(isLoading) then return false end
                             local entries = rowsFromSnapshot(use)
                             return #entries == 0
                         end),
+                        [Children] = {
+                            UiIcon.titleRow(s, {
+                                source = "tab_leaderboard",
+                                text = "Будь первым в лидерборде!",
+                                textSize = sc(14),
+                                font = Enum.Font.GothamBold,
+                                textColor = C.textLabel,
+                                size = UDim2.new(1, 0, 1, 0),
+                                iconSize = sc(18),
+                            }),
+                        },
                     }),
                 },
             }),
             -- Footer: «Вы: #N» если игрок не в top-50.
             s:New("Frame")({
                 Name = "MyRank",
-                Size = UDim2.new(1, -8, 0, 26),
-                Position = UDim2.new(0, 0, 1, -30),
+                Size = UDim2.new(1, -sc(8), 0, sc(26)),
+                Position = UDim2.new(0, 0, 1, -sc(30)),
                 BackgroundColor3 = C.btnBg,
                 BackgroundTransparency = 0.2,
                 BorderSizePixel = 0,
@@ -449,18 +480,18 @@ function LeaderboardPanel.create(s: ScopeFactory.HudScope, state: HudStateModule
                     return r ~= nil
                 end),
                 [Children] = {
-                    s:New("UICorner")({ CornerRadius = UDim.new(0, 6) }),
-                    s:New("UIStroke")({ Color = C.gold, Thickness = 1.2, Transparency = 0.4 }),
+                    s:New("UICorner")({ CornerRadius = UDim.new(0, sc(6)) }),
+                    s:New("UIStroke")({ Color = C.gold, Thickness = sc(theme.STROKE.thin), Transparency = 0.4 }),
                     s:New("TextLabel")({
-                        Size = UDim2.new(1, -16, 1, 0),
-                        Position = UDim2.new(0, 8, 0, 0),
+                        Size = UDim2.new(1, -sc(16), 1, 0),
+                        Position = UDim2.new(0, sc(8), 0, 0),
                         BackgroundTransparency = 1,
                         Text = s:Computed(function(use)
                             local r = use(myRankValue)
                             if not r then return "Вы: вне топа" end
                             return ("Вы: %s"):format(LeaderboardLogic.formatRank(r))
                         end),
-                        TextSize = 13,
+                        TextSize = text(13),
                         Font = Enum.Font.GothamBold,
                         TextColor3 = C.gold,
                         TextXAlignment = Enum.TextXAlignment.Left,

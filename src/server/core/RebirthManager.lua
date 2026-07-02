@@ -132,11 +132,11 @@ function RebirthManager:_notifyRebirth(player: Player, data: OreTypes.PlayerData
         return
     end
     self._notify(player, {
-        text = ("REBIRTH! Ребёрт #%d, теперь x%.1f к ценам руд"):format(
+        text = ("REBIRTH! Ребёрт #%d, теперь %s к ценам руд"):format(
             data.rebirths or 0,
-            data.rebirthMultiplier or 1
+            RebirthLogic.formatMultiplier(data.rebirthMultiplier or 1)
         ),
-        icon = "💠",
+        icon = "tab_rebirth",
         color = MYTHIC_GOLD,
         duration = 5,
         -- `kind` сигнализирует клиенту запустить RebirthFX. Notification.show
@@ -182,7 +182,7 @@ function RebirthManager:_handleRebirth(player: Player)
         rebirths = data.rebirths,
         rebirthMultiplier = data.rebirthMultiplier,
         coinsSpent = cost,
-        message = ("REBIRTH! x%.1f"):format(data.rebirthMultiplier or 1),
+        message = ("REBIRTH! %s"):format(RebirthLogic.formatMultiplier(data.rebirthMultiplier or 1)),
     }
 end
 

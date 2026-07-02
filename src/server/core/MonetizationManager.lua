@@ -34,6 +34,8 @@ local shared = ReplicatedStorage:WaitForChild("shared")
 local Logger = require(shared.util.Logger)
 local Constants = require(shared.constants)
 local MonetizationLogic = require(shared.util.MonetizationLogic)
+require(shared.util.EggMonetization)
+local PlayerBoosts = require(script.Parent.PlayerBoosts)
 
 export type Deps = {
     profileManager: any,
@@ -101,6 +103,20 @@ local function ensureGamepasses(data: any)
     return data.gamepasses
 end
 
+local function ensureShopPurchases(data: any)
+    if typeof(data.shopPurchases) ~= "table" then
+        data.shopPurchases = {}
+    end
+    return data.shopPurchases
+end
+
+local function ensureActiveBoosts(data: any)
+    if typeof(data.activeBoosts) ~= "table" then
+        data.activeBoosts = {}
+    end
+    return data.activeBoosts
+end
+
 ----------------------------------------------------------------------
 -- Gamepasses
 ----------------------------------------------------------------------
@@ -140,8 +156,8 @@ function MonetizationManager:_grantGamepass(player: Player, key: string, doNotif
 
     if doNotify and not wasOwned and self._notify then
         self._notify(player, {
-            text = ("%s %s активирован!"):format(def.icon or "✨", def.name or key),
-            icon = def.icon or "✨",
+            text = ("%s активирован!"):format(def.name or key),
+            icon = def.icon or "icon_sparkle",
             color = GOLD,
             duration = 4,
         })
@@ -202,6 +218,44 @@ end
 ----------------------------------------------------------------------
 
 --[[
+    Выдать одну награду из bundle/starter. Возвращает true при успехе.
+]]
+function MonetizationManager:_grantReward(
+    player: Player,
+    data: any,
+    reward: any,
+    source: string
+): boolean
+    if typeof(reward) ~= "table" then
+        return false
+    end
+    if reward.kind == "coins" then
+        local amt = math.max(0, math.floor(reward.amount or 0))
+        data.coins = (data.coins or 0) + amt
+        data.totalCoinsEarned = (data.totalCoinsEarned or 0) + amt
+        return true
+    elseif reward.kind == "eggs" then
+        if not self._petManager then
+            self._log:warn("Egg-награда без PetManager")
+            return false
+        end
+        local count = math.max(1, math.floor(reward.amount or 1))
+        self._petManager:grantHatch(player, count)
+        return true
+    elseif reward.kind == "boost" then
+        local activeBoosts = ensureActiveBoosts(data)
+        PlayerBoosts.addBoost(activeBoosts, {
+            kind = reward.boostKind or "coins",
+            multiplier = reward.multiplier or 2,
+            durationSec = math.max(1, math.floor(reward.durationSec or 900)),
+            source = source,
+        })
+        return true
+    end
+    return false
+end
+
+--[[
     Выдать награду девпродукта. Возвращает true при успехе. Вызывается из
     ProcessReceipt (реальная покупка) и devGrantProduct (эмуляция).
 ]]
@@ -209,15 +263,66 @@ function MonetizationManager:_grantProduct(player: Player, data: any, productDef
     if not productDef then
         return false
     end
-    if productDef.kind == "coins" then
+
+    if productDef.oneTime == true then
+        local purchases = ensureShopPurchases(data)
+        if purchases[productDef.key] == true then
+            self._log:warn("Повторная покупка one-time продукта:", productDef.key, player.UserId)
+            return false
+        end
+    end
+
+    if productDef.kind == "bundle" then
+        local rewards = productDef.rewards
+        if typeof(rewards) ~= "table" or #rewards == 0 then
+            return false
+        end
+        local source = "shop_" .. tostring(productDef.key)
+        for _, reward in ipairs(rewards) do
+            if not self:_grantReward(player, data, reward, source) then
+                return false
+            end
+        end
+        if productDef.oneTime == true then
+            ensureShopPurchases(data)[productDef.key] = true
+        end
+        self:_sync(player)
+        if self._notify then
+            self._notify(player, {
+                text = ("Набор «%s» получен!"):format(productDef.name or productDef.key),
+                icon = productDef.icon or "icon_gift",
+                color = GOLD,
+                duration = 4,
+            })
+        end
+        return true
+    elseif productDef.kind == "boost" then
+        local activeBoosts = ensureActiveBoosts(data)
+        PlayerBoosts.addBoost(activeBoosts, {
+            kind = productDef.boostKind or "coins",
+            multiplier = productDef.multiplier or 2,
+            durationSec = math.max(1, math.floor(productDef.durationSec or 900)),
+            source = "shop_" .. tostring(productDef.key),
+        })
+        self:_sync(player)
+        if self._notify then
+            self._notify(player, {
+                text = ("Буст «%s» активирован!"):format(productDef.name or productDef.key),
+                icon = productDef.icon or "icon_sparkle",
+                color = GOLD,
+                duration = 4,
+            })
+        end
+        return true
+    elseif productDef.kind == "coins" then
         local amt = math.max(0, math.floor(productDef.amount or 0))
         data.coins = (data.coins or 0) + amt
         data.totalCoinsEarned = (data.totalCoinsEarned or 0) + amt
         self:_sync(player)
         if self._notify then
             self._notify(player, {
-                text = ("%s +%d монет!"):format(productDef.icon or "💰", amt),
-                icon = productDef.icon or "💰",
+                text = ("+%d монет!"):format(amt),
+                icon = productDef.icon or "coin",
                 color = GOLD,
                 duration = 4,
             })
@@ -233,12 +338,37 @@ function MonetizationManager:_grantProduct(player: Player, data: any, productDef
         -- grantHatch уже дёрнул _sync. Шлём egg_purchase для PetHatchFX.
         if self._notify then
             self._notify(player, {
-                text = ("%s Вылупилось питомцев: %d"):format(productDef.icon or "🥚", hatched and #hatched or 0),
-                icon = productDef.icon or "🥚",
+                text = ("Вылупилось питомцев: %d"):format(hatched and #hatched or 0),
+                icon = productDef.icon or "icon_egg",
                 color = GOLD,
                 duration = 4,
                 kind = "egg_purchase",
                 pets = hatched,
+            })
+        end
+        return true
+    elseif productDef.kind == "egg_hatch" then
+        if not self._petManager then
+            self._log:warn("Egg hatch продукт без PetManager")
+            return false
+        end
+        local eggId = productDef.eggId
+        if typeof(eggId) ~= "string" or eggId == "" then
+            return false
+        end
+        local count = math.max(1, math.floor(productDef.amount or 1))
+        local hatched = self._petManager:grantHatch(player, count, eggId)
+        local eggDef = (Constants.PETS or {}).eggs and Constants.PETS.eggs[eggId]
+        if self._notify then
+            self._notify(player, {
+                text = ("Вылупилось питомцев: %d"):format(hatched and #hatched or 0),
+                icon = productDef.icon or "icon_egg",
+                color = GOLD,
+                duration = 4,
+                kind = "egg_purchase",
+                pets = hatched,
+                eggId = eggId,
+                eggModelName = eggDef and eggDef.modelName,
             })
         end
         return true
@@ -350,7 +480,7 @@ function MonetizationManager:_refreshVipTag(player: Player)
     title.BackgroundTransparency = 1
     title.Size = UDim2.new(1, 0, 0, 16)
     title.Position = UDim2.new(0, 0, 0, 0)
-    title.Text = "👑 VIP"
+    title.Text = "VIP"
     title.TextSize = 13
     title.Font = Enum.Font.GothamBlack
     title.TextColor3 = color

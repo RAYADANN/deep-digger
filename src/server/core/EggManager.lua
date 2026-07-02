@@ -3,11 +3,11 @@
 --
 -- Экономика яиц: определения (из Constants.PETS.eggs), цена, batch-hatch.
 -- НЕ хранит состояние игрока — это делает PetManager (playerData.pets).
--- Формула weighted random roll живёт в PetLogic.rollHatch (единый источник),
+-- Пул питомцев и weighted roll — PetLogic + EggPoolDatabase (единый источник),
 -- здесь только оркестрация count + стоимости.
 --
--- MVP: один тип яйца «basic» (Basic Egg). Добавление Gold Egg в патче 1.1 =
--- новая запись в Constants.PETS.eggs + (опц.) свои веса rarity.
+-- MVP: один тип яйца «basic» (Basic Egg). Новые яйца =
+-- запись в Constants.PETS.eggs + пул в EggPoolDatabase.
 --
 -- Plain-модуль (без .new / DI): функции чистые, читают только Constants +
 -- PetLogic. PetManager require'ит его напрямую.
@@ -23,16 +23,19 @@ export type EggDef = {
     id: string,
     name: string,
     icon: string,
+    modelName: string?,
     cost: number,
+    gemCost: number?,
 }
+
+export type Currency = "coins" | "gems"
 
 function EggManager.getEgg(eggId: string): EggDef?
     local eggs = (Constants.PETS or {}).eggs or {}
     return eggs[eggId]
 end
 
--- Цена за `count` яиц данного типа. Возвращает 0 для неизвестного яйца —
--- вызывающий (PetManager) сам решит, что делать (вернёт ошибку).
+-- Цена в монетах за `count` яиц. 0 для неизвестного яйца — вызывающий решит.
 function EggManager.totalCost(eggId: string, count: number): number
     local egg = EggManager.getEgg(eggId)
     if not egg then
@@ -40,6 +43,27 @@ function EggManager.totalCost(eggId: string, count: number): number
     end
     local n = math.max(0, math.floor(count or 0))
     return (egg.cost or 0) * n
+end
+
+-- P1.6: цена за `count` яиц в выбранной валюте. Для gems используется
+-- egg.gemCost (nil/0 → яйцо нельзя купить за гемы). Единая точка цены для
+-- сервера (валидация) и клиента (кнопки), чтобы числа не разъезжались.
+function EggManager.totalPrice(eggId: string, count: number, currency: Currency): number
+    local egg = EggManager.getEgg(eggId)
+    if not egg then
+        return 0
+    end
+    local n = math.max(0, math.floor(count or 0))
+    if currency == "gems" then
+        return (egg.gemCost or 0) * n
+    end
+    return (egg.cost or 0) * n
+end
+
+-- Можно ли купить это яйцо за гемы (есть положительный gemCost).
+function EggManager.acceptsGems(eggId: string): boolean
+    local egg = EggManager.getEgg(eggId)
+    return egg ~= nil and typeof(egg.gemCost) == "number" and egg.gemCost > 0
 end
 
 -- Клампит запрошенное число яиц в [1, hatchBatchMax] — серверный античит на
@@ -63,7 +87,7 @@ function EggManager.hatch(eggId: string, count: number, rng: (() -> number)?): {
     end
     local n = EggManager.clampCount(count)
     for _ = 1, n do
-        table.insert(result, PetLogic.rollHatch(rng))
+        table.insert(result, PetLogic.rollHatch(eggId, rng))
     end
     return result
 end

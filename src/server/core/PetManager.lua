@@ -6,7 +6,7 @@
 -- идемпотентен.
 --
 -- Хендлеры:
---   Net:Handle("HatchEgg", count)  — купить + вылупить count яиц (батч «10x»).
+--   Net:Handle("HatchEgg", eggId, count) — купить + вылупить count яиц у машины.
 --                                    Серверная валидация монет, weighted roll
 --                                    через EggManager/PetLogic, запись в
 --                                    playerData.pets, авто-equip первого пета
@@ -53,8 +53,8 @@ function PetManager.new(deps: Deps)
     self._onProfileChanged = deps.onProfileChanged
     self._notify = deps.notify
 
-    Net:Handle("HatchEgg", function(player: Player, count: number?)
-        return self:_handleHatch(player, count)
+    Net:Handle("HatchEgg", function(player: Player, eggId: string?, count: number?, currency: string?)
+        return self:_handleHatch(player, eggId, count, currency)
     end)
     Net:Handle("EquipPet", function(player: Player, uid: string?)
         return self:_handleEquip(player, uid)
@@ -160,8 +160,8 @@ end
     даёт буст без лишнего клика). Используется и платным HatchEgg, и
     бесплатным grantHatch (Phase 12 «Egg 10x» / dev).
 ]]
-function PetManager:_hatchInto(data: any, n: number)
-    local petIds = EggManager.hatch(DEFAULT_EGG_ID, n)
+function PetManager:_hatchInto(data: any, eggId: string, n: number)
+    local petIds = EggManager.hatch(eggId, n)
     local hatched = {}
     for _, petId in ipairs(petIds) do
         local rec = addPet(data, petId)
@@ -176,23 +176,54 @@ function PetManager:_hatchInto(data: any, n: number)
 end
 
 --[[
-    HatchEgg: купить и вылупить count яиц. Возвращает hatched-список для
+    HatchEgg: купить и вылупить count яиц. `currency` — "coins" (по умолчанию)
+    или "gems" (P1.6: Desert Egg за кристаллы). Возвращает hatched-список для
     клиентского PetHatchFX. Авто-equip первого пета если слот пуст.
 ]]
-function PetManager:_handleHatch(player: Player, count: number?)
+function PetManager:_handleHatch(player: Player, eggId: string?, count: number?, currency: string?)
     local data = self:_data(player)
     if not data then
         return { success = false, error = "no_profile", message = "Профиль не загружен" }
     end
     ensurePetFields(data)
 
+    local resolvedEggId = if typeof(eggId) == "string" and eggId ~= "" then eggId else DEFAULT_EGG_ID
+    local useGems = currency == "gems"
     local n = EggManager.clampCount(count)
-    local cost = EggManager.totalCost(DEFAULT_EGG_ID, n)
-    local egg = EggManager.getEgg(DEFAULT_EGG_ID)
+    local egg = EggManager.getEgg(resolvedEggId)
     if not egg then
         return { success = false, error = "no_egg", message = "Яйцо не настроено" }
     end
 
+    if useGems then
+        if not EggManager.acceptsGems(resolvedEggId) then
+            return { success = false, error = "no_gem_price", message = "Это яйцо нельзя купить за кристаллы" }
+        end
+        local cost = EggManager.totalPrice(resolvedEggId, n, "gems")
+        local gems = data.gems or 0
+        if gems < cost then
+            return {
+                success = false,
+                error = "not_enough_gems",
+                message = ("Не хватает %d кристаллов"):format(cost - gems),
+                requiredGems = cost,
+            }
+        end
+        data.gems = gems - cost
+        local hatched = self:_hatchInto(data, resolvedEggId, n)
+        self:_sync(player)
+        self._log:info("Hatch(gems) by", player.UserId, "- egg:", resolvedEggId, "- count:", n, "- gems:", cost, "- pets:", #hatched)
+        return {
+            success = true,
+            hatched = hatched,
+            gemsSpent = cost,
+            count = n,
+            eggId = resolvedEggId,
+            currency = "gems",
+        }
+    end
+
+    local cost = EggManager.totalCost(resolvedEggId, n)
     local coins = data.coins or 0
     if coins < cost then
         return {
@@ -203,14 +234,14 @@ function PetManager:_handleHatch(player: Player, count: number?)
         }
     end
 
-    -- Списываем монеты, катим хэтчи.
     data.coins = coins - cost
-    local hatched = self:_hatchInto(data, n)
+    local hatched = self:_hatchInto(data, resolvedEggId, n)
 
     self:_sync(player)
 
     self._log:info(
         "Hatch by", player.UserId,
+        "- egg:", resolvedEggId,
         "- count:", n,
         "- cost:", cost,
         "- pets:", #hatched
@@ -221,6 +252,8 @@ function PetManager:_handleHatch(player: Player, count: number?)
         hatched = hatched,
         coinsSpent = cost,
         count = n,
+        eggId = resolvedEggId,
+        currency = "coins",
     }
 end
 
@@ -320,14 +353,15 @@ end
     хук для Phase 12 (девпродукт «Egg 10x» в MonetizationManager) и DevCommands.
     Возвращает hatched-список для клиентского PetHatchFX.
 ]]
-function PetManager:grantHatch(player: Player, count: number?)
+function PetManager:grantHatch(player: Player, count: number?, eggId: string?)
     local data = self:_data(player)
     if not data then
         return nil
     end
     ensurePetFields(data)
     local n = EggManager.clampCount(count)
-    local hatched = self:_hatchInto(data, n)
+    local resolvedEggId = if typeof(eggId) == "string" and eggId ~= "" then eggId else DEFAULT_EGG_ID
+    local hatched = self:_hatchInto(data, resolvedEggId, n)
     self:_sync(player)
     return hatched
 end

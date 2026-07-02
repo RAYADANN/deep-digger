@@ -7,9 +7,12 @@ local ScopeFactory = require(script.Parent.Parent.ScopeFactory)
 local HudStateModule = require(script.Parent.Parent.HudState)
 local theme = require(script.Parent.Parent.theme)
 local InvSlot = require(script.Parent.Parent.components.InvSlot)
+local PanelScale = require(script.Parent.Parent.PanelScale)
 
 local Children = Fusion.Children
 local C = theme.C
+-- Десктоп: геометрия ×2 синхронно с ×2 текстом (gsc). Phone/tablet без изменений.
+local sc = PanelScale.gsc
 
 local InventoryPanel = {}
 
@@ -19,7 +22,7 @@ function InventoryPanel.create(s: ScopeFactory.HudScope, state: HudStateModule.H
         Size = UDim2.new(1, 0, 1, 0),
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
-        ScrollBarThickness = 5,
+        ScrollBarThickness = PanelScale.scrollBar(),
         ScrollBarImageColor3 = C.panelBorder,
         CanvasSize = UDim2.new(0, 0, 0, 0),
         AutomaticCanvasSize = Enum.AutomaticSize.Y,
@@ -28,12 +31,19 @@ function InventoryPanel.create(s: ScopeFactory.HudScope, state: HudStateModule.H
         end),
         [Children] = {
             s:New("UIGridLayout")({
-                CellSize = UDim2.new(0, 58, 0, 68),
-                CellPadding = UDim2.new(0, 8, 0, 8),
+                CellSize = UDim2.fromOffset(sc(58), sc(68)),
+                CellPadding = UDim2.fromOffset(sc(8), sc(8)),
                 SortOrder = Enum.SortOrder.Name,
             }),
-            s:New("UIPadding")({ PaddingLeft = UDim.new(0, 4), PaddingTop = UDim.new(0, 4) }),
+            s:New("UIPadding")({
+                PaddingLeft = PanelScale.pad(4),
+                PaddingTop = PanelScale.pad(4),
+            }),
             s:Computed(function(use)
+                if not use(state.panelOpen) or use(state.activeTab) ~= "inventory" then
+                    return {}
+                end
+                HudStateModule.flushPendingInventory(state)
                 local slots = {}
                 for _, item in ipairs(use(state.inventory)) do
                     slots[#slots + 1] = InvSlot.create(s, { oreId = item.oreId, count = item.count })

@@ -3,14 +3,18 @@
 -- Инициализирует рендер шахты, UI, подключает сеть.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
 local shared = ReplicatedStorage:WaitForChild("shared")
 local modules = ReplicatedStorage:WaitForChild("Packages")
 
 local Logger = require(shared.util.Logger)
+local Constants = require(shared.constants)
 local FreezeDiagnostics = require(script.core.FreezeDiagnostics)
 local MiningRenderer = require(script.core.MiningRenderer)
 local DepthTracker = require(script.core.DepthTracker)
 local LayerEnvironment = require(script.core.LayerEnvironment)
+local LayerAmbience = require(script.core.LayerAmbience)
 local Headlamp = require(script.core.Headlamp)
 local SoundManager = require(script.core.SoundManager)
 local CameraShake = require(script.core.CameraShake)
@@ -23,7 +27,15 @@ local RewardFX = require(script.ui.RewardFX)
 local PetVisual = require(script.ui.PetVisual)
 local PetHatchFX = require(script.ui.PetHatchFX)
 local OreDiscoveryFX = require(script.ui.OreDiscoveryFX)
+local HomeFX = require(script.ui.HomeFX)
+local EggMachines = require(script.core.EggMachines)
+local HubZones = require(script.core.HubZones)
+local WorldLeaderboard = require(script.core.WorldLeaderboard)
+local PlayerTagScale = require(script.core.PlayerTagScale)
+local SellButton = require(script.ui.hud.components.SellButton)
 local PetLogic = require(shared.util.PetLogic)
+local UpgradeLogic = require(shared.util.UpgradeLogic)
+local PetModelKit = require(shared.util.PetModelKit)
 local ScopeFactory = require(script.ui.hud.ScopeFactory)
 local Net = require(modules.Net)
 
@@ -34,6 +46,7 @@ SoundManager.start()
 -- Не фиксируем камеру: при респавне CurrentCamera пересоздаётся, а внутренний
 -- currentCamera() в модуле умеет fallback на workspace.CurrentCamera каждый кадр.
 CameraShake.start()
+PlayerTagScale.start()
 
 -- Диагностика фризов: стартует сразу, чтобы поймать причины просадок FPS с
 -- первого кадра. Печатает причину каждого фриза (>100 мс) в консоль; полный
@@ -50,12 +63,15 @@ local renderer = MiningRenderer.new()
 local hud: HUD? = nil
 local depthTracker = DepthTracker.new(player)
 local layerEnvironment = LayerEnvironment.new()
+local layerAmbience = LayerAmbience.new()
 local headlamp = Headlamp.new()
 depthTracker:onChanged(function(info)
     if hud then
         hud:setDepth(info.depth, info.layerId, info.layerName)
     end
     layerEnvironment:apply(info.layerId)
+    local character = player.Character
+    layerAmbience:apply(info.layerId, character, info.layerChanged)
     headlamp:setDepth(info.depth)
     pcall(function()
         Net:Invoke("UpdateDepth", info.depth)
@@ -80,7 +96,10 @@ local function applyPlayerPayload(data)
     for k, v in pairs(data) do
         playerDataBuffer[k] = v
     end
-    renderer:setSwingDelay(data.speedLevel or 1)
+    renderer:setSwingDelay(
+        data.speedLevel or 1,
+        UpgradeLogic.speedBoostMultiplier(data.activeBoosts)
+    )
     if hud then
         local t0 = os.clock()
         hud:setPlayerData(playerDataBuffer)
@@ -89,8 +108,11 @@ local function applyPlayerPayload(data)
     end
     pcall(function()
         local equippedPets = PetLogic.getEquippedPets(playerDataBuffer)
-        local def = equippedPets[1]
-        PetVisual.setEquipped(def and def.id or nil)
+        local petIds: { string } = {}
+        for _, def in ipairs(equippedPets) do
+            table.insert(petIds, def.id)
+        end
+        PetVisual.setEquippedPets(petIds)
     end)
 end
 
@@ -125,6 +147,7 @@ local function applyMiningHudDelta(delta)
         PerfBeacon.addTime("hudMiningDeltaMs", (os.clock() - t0) * 1000)
         PerfBeacon.bump("hudMiningDelta")
     end
+    Tutorial.applyStats(delta)
 end
 
 -- Phase 10: persistent scope для модального оверлея DailyRewardModal.
@@ -223,7 +246,18 @@ Net:Connect("Notify", function(payload)
     -- Phase 12: девпродукт «Egg 10x» — server-authoritative hatch FX.
     elseif payload.kind == "egg_purchase" then
         pcall(function()
-            PetHatchFX.play(payload.pets)
+            local modelName = payload.eggModelName
+            if not modelName then
+                local eggId = payload.eggId
+                local eggs = (Constants.PETS or {}).eggs
+                local def = eggs and eggId and eggs[eggId]
+                modelName = def and def.modelName
+            end
+            if not modelName then
+                local basic = (Constants.PETS or {}).eggs and Constants.PETS.eggs.basic
+                modelName = basic and basic.modelName
+            end
+            PetHatchFX.play(payload.pets, modelName)
         end)
     -- Phase 13: первая добыча новой руды → reveal-анимация «НОВАЯ НАХОДКА»
     -- (очередь внутри FX обрабатывает несколько находок за удар).
@@ -240,6 +274,16 @@ Net:Connect("Notify", function(payload)
             RewardFX.burst(payload.rarity or "legendary")
             SoundManager.play("sell_success")
         end)
+    -- P2.9: добыта мутировавшая руда — celebration (coin-burst + звук).
+    elseif payload.kind == "mutation" then
+        pcall(function()
+            RewardFX.burst("legendary")
+            SoundManager.play("sell_success")
+        end)
+    elseif payload.kind == "social_reward" then
+        pcall(function()
+            RewardFX.burst("epic")
+        end)
     end
 end)
 
@@ -252,8 +296,16 @@ local function onCharacterAdded(character: Model)
     end
     renderer:stop() -- сброс сети/очереди перед повторным start (респавн)
     renderer:start()
-    hud = HUD.new(player)
+    hud = HUD.new(player, function()
+        HomeFX.play(function()
+            pcall(function() Net:Invoke("GoHome") end)
+        end)
+    end)
+    if RunService:IsStudio() then
+        log:info("Studio HUD ready (DDHud debug export removed)")
+    end
     layerEnvironment:reset()
+    layerAmbience:reset()
     -- Фонарик: персонаж новый на каждом респавне → привязываем заново.
     headlamp:attach(character)
     depthTracker:start()
@@ -278,6 +330,7 @@ player.AncestryChanged:Connect(function()
         renderer:stop()
         depthTracker:stop()
         headlamp:destroy()
+        layerAmbience:destroy()
         if hud then hud:destroy(); hud = nil end
         Tutorial.destroy()
         PetVisual.destroy()
@@ -301,10 +354,22 @@ player.Chatted:Connect(function(msg)
         FreezeDiagnostics.start({ freezeMs = 100 })
     elseif cmd == "/diagreset" then
         FreezeDiagnostics.reset()
+    elseif cmd == "/refreshstand" then
+        if RunService:IsStudio() then
+            local ok, result = pcall(function()
+                return require(ReplicatedStorage:WaitForChild("shared").dev.RefreshOreReferenceStand).refresh()
+            end)
+            if ok then
+                print("[RefreshStand]", result)
+            else
+                print("[RefreshStand] error:", result)
+            end
+        end
     elseif cmd == "/help" then
         print("--- Deep Digger Commands ---")
         print("/rarity - toggle rarity strips")
         print("/hpbar - toggle HP bars on hover")
+        print("/refreshstand - обновить OreReferenceBlocks_Restyled (Studio)")
         print("/diagreport - печать отчёта о фризах/FPS с причинами")
         print("/diagstop - стоп диагностики (+ финальный отчёт)")
         print("/diagstart - старт диагностики")
@@ -314,3 +379,66 @@ player.Chatted:Connect(function(msg)
 end)
 
 log:info("Client initialized")
+
+local function eggMachineGetCoins(): number
+	return playerDataBuffer.coins or 0
+end
+
+local function initEggMachines()
+	EggMachines.init({ getCoins = eggMachineGetCoins })
+end
+
+-- Яйца: не ждём PetKit — proximity и модалка должны работать сразу после спавна.
+task.defer(function()
+	local eggs = Workspace:WaitForChild("Eggs", 30)
+	if eggs then
+		initEggMachines()
+	else
+		warn("[Client:Init] Workspace.Eggs не найден — машины яиц отключены")
+	end
+end)
+
+task.defer(function()
+	Workspace:WaitForChild("SELL", 20)
+	Workspace:WaitForChild("UPGRADE", 20)
+	local function initHubZones()
+		HubZones.init({
+			onSell = function()
+				SellButton.activate()
+			end,
+			onUpgrades = function()
+				if hud then
+					hud:openTab("upgrades")
+				end
+			end,
+			onLeaveUpgrades = function()
+				if hud and hud:isUpgradesOpen() then
+					hud:closePanel()
+				end
+			end,
+			isUpgradesOpen = function()
+				return hud ~= nil and hud:isUpgradesOpen()
+			end,
+		})
+	end
+	initHubZones()
+	WorldLeaderboard.init()
+	player.CharacterAdded:Connect(function()
+		task.defer(function()
+			HubZones.refresh()
+			WorldLeaderboard.refresh()
+		end)
+	end)
+end)
+
+task.spawn(function()
+	ReplicatedStorage:WaitForChild("PetKit", 60)
+	PetModelKit.invalidateCache()
+end)
+
+local localPlayer = Players.LocalPlayer
+if localPlayer then
+	localPlayer.CharacterAdded:Connect(function()
+		task.defer(initEggMachines)
+	end)
+end

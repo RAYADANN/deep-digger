@@ -35,11 +35,44 @@ function UpgradeLogic.upgradeCost(upgradeId: string, currentLevel: number): numb
     return math.floor(cfg.baseCost * ((cfg.exponent or 1.5) ^ (currentLevel - 1)))
 end
 
-function UpgradeLogic.swingDelaySeconds(speedLevel: number): number
+-- P1.7: мультипликативное (diminishing) снижение задержки удара. Каждый
+-- уровень множит задержку на (1 - reductionPct), поэтому пол достигается
+-- асимптотически — ни один из 50 уровней не «мёртвый». Fallback на старый
+-- линейный reductionMs оставлен на случай отсутствия reductionPct в конфиге.
+function UpgradeLogic.swingDelaySeconds(speedLevel: number, speedBoostMult: number?): number
     local cfg = Constants.UPGRADES.speed
-    local reductionMs = cfg.reductionMs or 20
-    local delayMs = Constants.BASE_SWING_DELAY_MS - (math.max(1, speedLevel) - 1) * reductionMs
-    return math.max(Constants.MIN_SWING_DELAY_SECONDS, delayMs / 1000)
+    local level = math.max(1, speedLevel)
+    local baseSeconds = Constants.BASE_SWING_DELAY_MS / 1000
+    local delay: number
+    if cfg.reductionPct then
+        delay = baseSeconds * ((1 - cfg.reductionPct) ^ (level - 1))
+    else
+        local reductionMs = cfg.reductionMs or 20
+        delay = (Constants.BASE_SWING_DELAY_MS - (level - 1) * reductionMs) / 1000
+    end
+    delay = math.max(Constants.MIN_SWING_DELAY_SECONDS, delay)
+    local mult = speedBoostMult or 1
+    if mult > 1 then
+        delay = delay / mult
+    end
+    return math.max(Constants.MIN_SWING_DELAY_SECONDS, delay)
+end
+
+-- Мультипликатор скорости копания из HUD-payload activeBoosts (клиент).
+function UpgradeLogic.speedBoostMultiplier(activeBoosts: { any }?): number
+    if not activeBoosts then
+        return 1
+    end
+    local sum = 0
+    for _, boost in ipairs(activeBoosts) do
+        if typeof(boost) == "table"
+            and boost.kind == "speed"
+            and (boost.remaining or 0) > 0
+        then
+            sum += (boost.multiplier or 1) - 1
+        end
+    end
+    return 1 + sum
 end
 
 function UpgradeLogic.pickaxePower(pickaxeLevel: number): number
@@ -59,9 +92,12 @@ function UpgradeLogic.fortuneBonusChance(fortuneLevel: number): number
     return (math.max(1, fortuneLevel) - 1) * (cfg.chancePerLevel or 0.02)
 end
 
-function UpgradeLogic.inventoryCapacity(inventoryLevel: number): number
+-- P1.4: ребёрт добавляет постоянные слоты рюкзака (RebirthLogic.inventorySlotBonus).
+-- `rebirths` опционален (default 0) — старые вызовы без ребёртов не ломаются.
+function UpgradeLogic.inventoryCapacity(inventoryLevel: number, rebirths: number?): number
     local cfg = Constants.UPGRADES.inventory
-    return Constants.BASE_INVENTORY_SLOTS + math.max(1, inventoryLevel) * (cfg.slotsPerLevel or 5)
+    local base = Constants.BASE_INVENTORY_SLOTS + math.max(1, inventoryLevel) * (cfg.slotsPerLevel or 5)
+    return base + RebirthLogic.inventorySlotBonus(rebirths or 0)
 end
 
 function UpgradeLogic.multiSellMultiplier(multiSellLevel: number): number

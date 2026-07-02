@@ -5,7 +5,7 @@
 -- передаётся как dep в SellInventory / DailyReward / DevCommands.
 --
 -- Структура boost'а:
---   { kind = "coins" | "luck" | "damage", multiplier = 2, expiresAt = 1696000000, source = "daily_day_4" }
+--   { kind = "coins" | "luck" | "damage" | "speed", multiplier = 2, expiresAt = 1696000000, source = "daily_day_4" }
 --
 -- API:
 --   PlayerBoosts.totalMultiplier(activeBoosts, kind, now?) -> number

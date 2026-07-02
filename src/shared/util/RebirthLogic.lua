@@ -44,11 +44,41 @@ end
 
 -- Множитель к value руд после `rebirths` ребёртов. Используется в
 -- SellInventory и денормализуется в playerData.rebirthMultiplier.
+-- P1.4: мультипликативная награда — multiplierBase ^ rebirths (компаундится).
+-- Fallback на старую линейную формулу (1 + r*per), если multiplierBase нет.
 function RebirthLogic.valueMultiplier(rebirths: number): number
     local c = cfg()
-    local per = c.multiplierPerRebirth or 0.1
     local r = math.max(0, math.floor(rebirths or 0))
+    if c.multiplierBase then
+        return c.multiplierBase ^ r
+    end
+    local per = c.multiplierPerRebirth or 0.1
     return 1 + r * per
+end
+
+-- P1.4: бонусные слоты пета за пройденные пороги REBIRTH.petSlotBonusAt.
+-- Складывается с базой Constants.PETS.maxEquipped и gamepass-бонусом
+-- внутри PetLogic.maxEquipped (единственный потребитель).
+function RebirthLogic.petSlotBonus(rebirths: number): number
+    local c = cfg()
+    local thresholds = c.petSlotBonusAt or {}
+    local r = math.max(0, math.floor(rebirths or 0))
+    local count = 0
+    for _, threshold in ipairs(thresholds) do
+        if r >= threshold then
+            count += 1
+        end
+    end
+    return count
+end
+
+-- P1.4: бонусные слоты рюкзака за ребёрты (линейно по
+-- REBIRTH.inventorySlotsPerRebirth). Складывается в UpgradeLogic.inventoryCapacity.
+function RebirthLogic.inventorySlotBonus(rebirths: number): number
+    local c = cfg()
+    local per = math.max(0, math.floor(c.inventorySlotsPerRebirth or 0))
+    local r = math.max(0, math.floor(rebirths or 0))
+    return r * per
 end
 
 -- Сколько +1 к maxLevel pickaxe уже разблокировано. Порог считается
@@ -82,17 +112,29 @@ function RebirthLogic.nextPickaxeBonusThreshold(rebirths: number): number?
     return nil
 end
 
--- Текстовое описание прироста множителя «до → после» для UI подтверждения.
-local function formatMultiplier(value: number): string
-    -- 1, 1.1, 1.2 ... — одна цифра после точки достаточно (multiplier
-    -- меняется кратно 0.1 при дефолтном multiplierPerRebirth).
-    return ("x%.1f"):format(value)
+-- Текстовое описание множителя для UI. P1.4: множитель теперь компаундится
+-- (×1.6/ребёрт) и быстро уходит в десятки/сотни — формат адаптивный:
+-- <10 → одна цифра после точки (x1.6), 10..999 → целое (x110), иначе
+-- компактно (x1.2k). Экспортируем — RebirthPanel/RebirthConfirmModal зовут
+-- отсюда, без дублей формата.
+function RebirthLogic.formatMultiplier(value: number): string
+    if value < 10 then
+        return ("x%.1f"):format(value)
+    elseif value < 1000 then
+        return ("x%d"):format(math.floor(value + 0.5))
+    elseif value < 1000000 then
+        return ("x%.1fk"):format(value / 1000)
+    end
+    return ("x%.1fM"):format(value / 1000000)
 end
 
 function RebirthLogic.describeReward(currentRebirths: number): string
     local now = RebirthLogic.valueMultiplier(currentRebirths)
     local nextR = RebirthLogic.valueMultiplier(currentRebirths + 1)
-    return ("К ценам руд: %s → %s"):format(formatMultiplier(now), formatMultiplier(nextR))
+    return ("К ценам руд: %s → %s"):format(
+        RebirthLogic.formatMultiplier(now),
+        RebirthLogic.formatMultiplier(nextR)
+    )
 end
 
 return RebirthLogic

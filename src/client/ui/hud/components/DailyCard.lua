@@ -1,19 +1,5 @@
 --!strict
 -- DailyCard.lua — Phase 10.
---
--- Одна карточка дневной награды в DailyRewardModal. Состав:
---   * Шапка: «День N» + ✓ если прошлый, glow-pulse если текущий, серое если будущий.
---   * Иконка типа награды (💰 / ⚡).
---   * Лейбл «+500 монет».
---   * Цветная UIStroke по rarity (common серый / mythic золотой).
---
--- Состояния (state-машина):
---   "past"    — claim'нул в одном из прошлых дней. Show ✓, темнее.
---   "current" — claim сегодня (selected при открытии модала, pulse-glow).
---   "future"  — будущий день. Greyed, без интерактивности.
---
--- Размер фиксированный 100×140 для desktop, рассчитан под grid 4 на ряд +
--- gap 10 — 4*100 + 3*10 = 430 px. Mobile UIListLayout сам разложит вертикально.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
@@ -22,12 +8,12 @@ local Fusion = require(ReplicatedStorage:WaitForChild("Packages").Fusion)
 local ScopeFactory = require(script.Parent.Parent.ScopeFactory)
 local theme = require(script.Parent.Parent.theme)
 local DailyRewardDatabase = require(ReplicatedStorage:WaitForChild("shared").data.DailyRewardDatabase)
+local UiAssets = require(ReplicatedStorage:WaitForChild("shared").data.UiAssets)
 
 local Children = Fusion.Children
 local C = theme.C
+local ICON = theme.ICON
 
--- RARITY → border-color. Соответствует Constants.RARITY_COLORS, но дублируем
--- здесь со стрижкой под тему HUD (theme.RARITY_COLOR).
 local RARITY_COLOR = theme.RARITY_COLOR
 
 export type CardState = "past" | "current" | "future"
@@ -43,7 +29,6 @@ local DailyCard = {}
 function DailyCard.create(s: ScopeFactory.HudScope, props: Props)
     local reward = DailyRewardDatabase.get(props.cycleDay)
     if not reward then
-        -- Защита от мисконфига — рендерим пустую заглушку.
         return s:New("Frame")({
             Size = UDim2.fromOffset(100, 140),
             BackgroundTransparency = 1,
@@ -51,11 +36,9 @@ function DailyCard.create(s: ScopeFactory.HudScope, props: Props)
     end
     local stateName = props.state
     local rarityColor = RARITY_COLOR[reward.rarity] or C.common
-    local icon = DailyRewardDatabase.iconFor(reward)
+    local iconKey = DailyRewardDatabase.iconFor(reward)
+    local rewardImage = UiAssets.resolve(iconKey)
 
-    -- Pulse-glow: для current-карточки тwen stroke.Transparency 0.1↔0.5
-    -- через TweenService. Не yield'ит — Tween бесконечно, очищается при
-    -- разрушении ScreenGui.
     local stroke = s:New("UIStroke")({
         Color = rarityColor,
         Thickness = if stateName == "current" then 3 else 1.5,
@@ -82,48 +65,42 @@ function DailyCard.create(s: ScopeFactory.HudScope, props: Props)
         [Children] = {
             s:New("UICorner")({ CornerRadius = UDim.new(0, 8) }),
             stroke,
-            -- Шапка «День N»
             s:New("TextLabel")({
                 Size = UDim2.new(1, 0, 0, 18),
                 Position = UDim2.new(0, 0, 0, 6),
                 BackgroundTransparency = 1,
                 Text = ("День %d"):format(props.cycleDay),
-                TextSize = 12,
+                TextSize = 14,
                 Font = Enum.Font.GothamBold,
                 TextColor3 = if stateName == "current" then C.gold else C.textLabel,
                 ZIndex = 2,
             }),
-            -- ✓ для past дней (поверх иконки)
-            s:New("TextLabel")({
-                Size = UDim2.fromOffset(28, 28),
-                Position = UDim2.new(0.5, -14, 0.5, -28),
-                BackgroundTransparency = 1,
-                Text = if stateName == "past" then "✓" else "",
-                TextSize = 36,
-                Font = Enum.Font.GothamBlack,
-                TextColor3 = Color3.fromRGB(140, 255, 140),
-                Visible = stateName == "past",
-                ZIndex = 3,
-            }),
-            -- Иконка типа награды
-            s:New("TextLabel")({
-                Size = UDim2.fromOffset(40, 40),
-                Position = UDim2.new(0.5, -20, 0.5, -28),
-                BackgroundTransparency = 1,
-                Text = icon,
-                TextScaled = true,
-                Font = Enum.Font.GothamBold,
-                TextColor3 = if stateName == "future" then C.textMuted else C.gold,
-                Visible = stateName ~= "past",
-                ZIndex = 2,
-            }),
-            -- Текст награды
+            if stateName == "past"
+                then s:New("ImageLabel")({
+                    Size = UDim2.fromOffset(32, 32),
+                    Position = UDim2.new(0.5, -16, 0.5, -28),
+                    BackgroundTransparency = 1,
+                    Image = UiAssets.image("icon_check"),
+                    ImageColor3 = ICON.tint,
+                    ScaleType = Enum.ScaleType.Fit,
+                    ZIndex = 3,
+                })
+                else s:New("ImageLabel")({
+                    Size = UDim2.fromOffset(40, 40),
+                    Position = UDim2.new(0.5, -20, 0.5, -28),
+                    BackgroundTransparency = 1,
+                    Image = rewardImage,
+                    ImageColor3 = ICON.tint,
+                    ImageTransparency = if stateName == "future" then ICON.mutedAlpha else 0,
+                    ScaleType = Enum.ScaleType.Fit,
+                    ZIndex = 2,
+                }),
             s:New("TextLabel")({
                 Size = UDim2.new(1, -8, 0, 36),
                 Position = UDim2.new(0, 4, 1, -44),
                 BackgroundTransparency = 1,
                 Text = reward.label,
-                TextSize = 11,
+                TextSize = 13,
                 Font = Enum.Font.GothamBold,
                 TextColor3 = if stateName == "future" then C.textMuted else C.textMain,
                 TextWrapped = true,
@@ -135,10 +112,6 @@ function DailyCard.create(s: ScopeFactory.HudScope, props: Props)
     })
 end
 
---[[
-    Запускает pulse-glow tween на UIStroke. Возвращает функцию stop().
-    Используется только для current-карточки (одна на модал).
-]]
 function DailyCard.startPulse(stroke: UIStroke): () -> ()
     if not stroke or not stroke:IsA("UIStroke") then
         return function() end

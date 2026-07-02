@@ -30,6 +30,8 @@ export type HudState = {
     layerId: any,
     layerName: any,
     inventory: any,
+    -- Суммарное кол-во предметов (для InventoryWidget без полного inventory:set на каждый удар).
+    inventoryUsed: any,
     upgrades: any,
     panelOpen: any,
     activeTab: any,
@@ -69,8 +71,10 @@ export type HudState = {
     petEffects: any,
     -- Phase 12: монетизация.
     --   gamepasses   — кэш владения { vip=true, ... } для ShopPanel / VIP-chip.
+    --   shopPurchases — one-time товары (starterPack).
     --   equippedUids — список uid экипированных петов (multi-slot).
     gamepasses: any,
+    shopPurchases: any,
     equippedUids: any,
     petMaxEquipped: any,
     -- Phase 13: журнал находок (retention — цель охоты = руда).
@@ -82,6 +86,9 @@ export type HudState = {
     questClaimedCount: any,
     questTotalCount: any,
     achievements: any,
+    equippedTitleId: any,
+    dailyQuests: any,
+    socialReward: any,
 }
 
 local HudState = {}
@@ -94,6 +101,14 @@ local function setIfDiff(valueObj: any, newVal: any, eq: ((any, any) -> boolean)
     if not same then
         valueObj:set(newVal)
     end
+end
+
+local function sumInventoryUsed(inv: { PlayerDataMapper.InventoryEntry }): number
+    local total = 0
+    for _, e in ipairs(inv) do
+        total += e.count
+    end
+    return total
 end
 
 local function inventoryEqual(a: { PlayerDataMapper.InventoryEntry }, b: { PlayerDataMapper.InventoryEntry }): boolean
@@ -114,6 +129,13 @@ local function shallowTableEqual(a: { [string]: any }, b: { [string]: any }): bo
         if a[k] == nil then return false end
     end
     return true
+end
+
+local function upgradesTableEqual(a: any, b: any): boolean
+    if typeof(a) ~= "table" or typeof(b) ~= "table" then
+        return false
+    end
+    return shallowTableEqual(a, b)
 end
 
 local function questActiveEqual(a: PlayerDataMapper.QuestActivePayload?, b: PlayerDataMapper.QuestActivePayload?): boolean
@@ -154,6 +176,7 @@ function HudState.create(scope: ScopeFactory.HudScope): HudState
         layerId = scope:Value("dirt"),
         layerName = scope:Value("Grassland"),
         inventory = scope:Value({} :: { PlayerDataMapper.InventoryEntry }),
+        inventoryUsed = scope:Value(0),
         upgrades = scope:Value({} :: PlayerDataMapper.UpgradeLevels),
         panelOpen = scope:Value(false),
         activeTab = scope:Value("inventory"),
@@ -183,6 +206,7 @@ function HudState.create(scope: ScopeFactory.HudScope): HudState
             damage = 1, luck = 1, coin = 0, multiMine = 0, equippedCount = 0,
         } :: PlayerDataMapper.PetEffectsPayload),
         gamepasses = scope:Value({} :: { [string]: boolean }),
+        shopPurchases = scope:Value({} :: { [string]: boolean }),
         equippedUids = scope:Value({} :: { string }),
         petMaxEquipped = scope:Value(1),
         discoveredOres = scope:Value({} :: { [string]: boolean }),
@@ -193,7 +217,28 @@ function HudState.create(scope: ScopeFactory.HudScope): HudState
         questClaimedCount = scope:Value(0),
         questTotalCount = scope:Value(0),
         achievements = scope:Value({} :: { PlayerDataMapper.AchievementPayload }),
+        equippedTitleId = scope:Value(nil :: string?),
+        dailyQuests = scope:Value({ quests = {}, secondsUntilReset = 0 } :: PlayerDataMapper.DailyQuestsPayload),
+        socialReward = scope:Value({
+            claimed = false,
+            promptSeen = false,
+            favoriteConfirmed = false,
+            inGroup = false,
+            canClaim = false,
+        } :: PlayerDataMapper.SocialRewardPayload),
     }
+end
+
+function HudState.flushPendingInventory(state: HudState)
+    local pending = (state :: any)._pendingInventory :: { PlayerDataMapper.InventoryEntry }?
+    if not pending then
+        return
+    end
+    HudState.sortInventory(pending)
+    if not inventoryEqual(peek(state.inventory), pending) then
+        state.inventory:set(pending)
+    end
+    (state :: any)._pendingInventory = nil
 end
 
 function HudState.sortInventory(inv: { PlayerDataMapper.InventoryEntry })
@@ -209,14 +254,17 @@ function HudState.applyMiningDelta(state: HudState, delta: MiningHudDelta)
         local prevCoins = peek(state.coins)
         setIfDiff(state.coins, delta.coins)
         if prevCoins ~= delta.coins then
-            AnimatedNumber.tween(state.coinsDisplay, delta.coins, COIN_TWEEN_SECONDS)
+            AnimatedNumber.snap(state.coinsDisplay, delta.coins)
         end
     end
     if delta.inventory then
         local inv = delta.inventory
-        HudState.sortInventory(inv)
-        if not inventoryEqual(peek(state.inventory), inv) then
-            state.inventory:set(inv)
+        setIfDiff(state.inventoryUsed, sumInventoryUsed(inv))
+        ;(state :: any)._pendingInventory = inv
+        local open = peek(state.panelOpen)
+        local tab = peek(state.activeTab)
+        if open and tab == "inventory" then
+            HudState.flushPendingInventory(state)
         end
     end
     if delta.totalBlocksMined ~= nil then
@@ -226,7 +274,7 @@ function HudState.applyMiningDelta(state: HudState, delta: MiningHudDelta)
         local prevTotal = peek(state.statTotalCoins)
         setIfDiff(state.statTotalCoins, delta.totalCoinsEarned)
         if prevTotal ~= delta.totalCoinsEarned then
-            AnimatedNumber.tween(state.statTotalCoinsDisplay, delta.totalCoinsEarned, COIN_TWEEN_SECONDS)
+            AnimatedNumber.snap(state.statTotalCoinsDisplay, delta.totalCoinsEarned)
         end
     end
     if delta.questActive ~= nil then
@@ -247,10 +295,16 @@ function HudState.applyServerPayload(state: HudState, payload: PlayerDataMapper.
         AnimatedNumber.tween(state.coinsDisplay, mapped.coins, COIN_TWEEN_SECONDS)
     end
     setIfDiff(state.gems, mapped.gems)
+    setIfDiff(state.inventoryUsed, sumInventoryUsed(mapped.inventory))
+    ;(state :: any)._pendingInventory = nil
     if not inventoryEqual(peek(state.inventory), mapped.inventory) then
         state.inventory:set(mapped.inventory)
     end
-    setIfDiff(state.upgrades, mapped.upgrades, shallowTableEqual)
+    local upgrades = mapped.upgrades
+    if typeof(upgrades) ~= "table" then
+        upgrades = PlayerDataMapper.mapUpgrades(payload)
+    end
+    setIfDiff(state.upgrades, upgrades, upgradesTableEqual)
     local prevStatCoins = peek(state.statTotalCoins)
     setIfDiff(state.statTotalCoins, mapped.totalCoinsEarned)
     if prevStatCoins ~= mapped.totalCoinsEarned then
@@ -272,6 +326,7 @@ function HudState.applyServerPayload(state: HudState, payload: PlayerDataMapper.
     setIfDiff(state.pets, mapped.pets, shallowTableEqual)
     setIfDiff(state.petEffects, mapped.petEffects, shallowTableEqual)
     setIfDiff(state.gamepasses, mapped.gamepasses, shallowTableEqual)
+    setIfDiff(state.shopPurchases, mapped.shopPurchases, shallowTableEqual)
     setIfDiff(state.equippedUids, mapped.equippedUids, shallowTableEqual)
     setIfDiff(state.petMaxEquipped, mapped.petMaxEquipped)
     local newEquipped = if #mapped.equippedUids > 0 then mapped.equippedUids[1] else mapped.equippedPet
@@ -287,6 +342,15 @@ function HudState.applyServerPayload(state: HudState, payload: PlayerDataMapper.
     setIfDiff(state.questTotalCount, mapped.questTotalCount)
     if not achievementsEqual(peek(state.achievements), mapped.achievements) then
         state.achievements:set(mapped.achievements)
+    end
+    setIfDiff(state.equippedTitleId, mapped.equippedTitleId)
+    -- P1.5: ежедневки обновляем на каждом полном sync (полный re-render
+    -- секции дешёвый — 3 строки). Deep-compare не нужен.
+    if mapped.dailyQuests ~= nil then
+        state.dailyQuests:set(mapped.dailyQuests)
+    end
+    if mapped.socialReward ~= nil then
+        setIfDiff(state.socialReward, mapped.socialReward, shallowTableEqual)
     end
 end
 

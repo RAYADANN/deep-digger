@@ -118,8 +118,8 @@ function DiscoveryManager:_notifyOreDiscovered(player: Player, oreId: string)
         return
     end
     self._notify(player, {
-        text = ("✨ Новая руда: %s!"):format(def.name or oreId),
-        icon = def.icon or "⛏",
+        text = ("Новая руда: %s!"):format(def.name or oreId),
+        icon = "icon_sparkle",
         color = rarityColor(def.rarity or "common"),
         duration = 3.5,
         kind = "ore_discovered",
@@ -148,9 +148,9 @@ function DiscoveryManager:_grantLayerMilestone(player: Player, data: any, layerI
         end
         self._notify(player, {
             text = if reward > 0
-                then ("📖 Слой «%s» полностью открыт! +%d 💰"):format(layerName, reward)
-                else ("📖 Слой «%s» полностью открыт!"):format(layerName),
-            icon = "📖",
+                then ("Слой «%s» полностью открыт! +%d монет"):format(layerName, reward)
+                else ("Слой «%s» полностью открыт!"):format(layerName),
+            icon = "tab_journal",
             color = GOLD,
             duration = 5,
             kind = "layer_milestone",

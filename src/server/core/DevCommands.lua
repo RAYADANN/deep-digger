@@ -16,6 +16,7 @@ export type Deps = {
     -- Phase 8: опционально — TutorialManager. Если передан, /reset
     -- сбрасывает шаги туториала и снова выдаёт стартовый бонус,
     -- чтобы можно было пройти онбординг повторно.
+    -- /wipe — полный сброс как у новичка (см. resetProfileToNewbie).
     tutorialManager: any?,
     -- Phase 9: опционально — RebirthManager. Если передан, /rebirth [N]
     -- даёт N ребёртов без проверки цены (для тестирования R5/R10/R25
@@ -48,6 +49,8 @@ export type Deps = {
     --   /resetquests       — сбросить цепочку квестов.
     --   /completequest     — выполнить активный квест (dev).
     questManager: any?,
+    -- /wipe: полный сброс прогресса (шахта, античит, snapshot).
+    onWipePlayer: ((player: Player) -> ())?,
 }
 
 local DevCommands = {}
@@ -68,6 +71,57 @@ local function parseAmount(arg: string?): number?
     return math.floor(math.min(n, 1e12))
 end
 
+-- Состояние профиля «как у новичка» (см. ProfileManager.DEFAULT_DATA).
+local function resetProfileToNewbie(data: any)
+    data.depth = 0
+    data.layer = "dirt"
+    data.coins = 0
+    data.gems = 0
+    data.pickaxeLevel = 1
+    data.speedLevel = 1
+    data.fortuneLevel = 1
+    data.inventoryLevel = 1
+    data.critLevel = 1
+    data.multiSellLevel = 1
+    data.autoSellUnlocked = false
+    data.inventory = {}
+    data.totalBlocksMined = 0
+    data.totalCoinsEarned = 0
+    data.bossesDefeated = 0
+    data.maxDepthReached = 0
+    data.shaftsFound = {}
+    data.shaftRoomCount = 0
+    data.playTime = 0
+    data.rebirths = 0
+    data.rebirthMultiplier = 1.0
+    data.pets = {}
+    data.equippedPet = nil
+    data.petUidCounter = 0
+    data.gamepasses = {}
+    data.shopPurchases = {}
+    data.discoveredOres = {}
+    data.discoveredMilestones = {}
+    data.claimedQuests = {}
+    data.unlockedAchievements = {}
+    data.equippedTitleId = nil
+    data.dailyState = {
+        lastClaimYday = 0,
+        lastClaimYear = 0,
+        currentStreak = 0,
+        totalDaysClaimed = 0,
+    }
+    data.activeBoosts = {}
+    data.leaderboardPlacement = {
+        coinsRank = nil,
+        depthRank = nil,
+        coinsValue = 0,
+        depthValue = 0,
+    }
+    data.tutorialStep = 0
+    data.firstSession = true
+    data._stoneLayerNotified = false
+end
+
 function DevCommands.new(deps: Deps)
     local self = setmetatable({}, DevCommands)
     self._log = Logger.new("DevCommands")
@@ -82,6 +136,7 @@ function DevCommands.new(deps: Deps)
     self._monetizationManager = deps.monetizationManager
     self._discoveryManager = deps.discoveryManager
     self._questManager = deps.questManager
+    self._onWipePlayer = deps.onWipePlayer
 
     if not isStudio() then
         self._log:info("DevCommands disabled (not Studio)")
@@ -122,7 +177,7 @@ function DevCommands:_notifyPlayer(player: Player, text: string)
     end
     self._notify(player, {
         text = text,
-        icon = "🛠",
+        icon = "tab_upgrades",
         color = { r = 120, g = 200, b = 255 },
         duration = 2,
     })
@@ -174,6 +229,43 @@ function DevCommands:_handleReset(player: Player)
     end
     self:_sync(player)
     self:_notifyPlayer(player, "Сброс монет/инвентаря")
+end
+
+function DevCommands:_handleWipe(player: Player)
+    local data = self:_data(player)
+    if not data then
+        return
+    end
+
+    resetProfileToNewbie(data)
+
+    if self._petManager then
+        self._petManager:devClearPets(player)
+    end
+    if self._tutorialManager then
+        self._tutorialManager:reset(player)
+    end
+    if self._dailyReward then
+        self._dailyReward:reset(player)
+    end
+    if self._discoveryManager then
+        self._discoveryManager:devResetJournal(player)
+    end
+    if self._questManager then
+        self._questManager:devResetQuests(player)
+    end
+    if self._monetizationManager then
+        pcall(function()
+            self._monetizationManager:onProfileLoaded(player)
+        end)
+    end
+    if self._onWipePlayer then
+        self._onWipePlayer(player)
+    end
+
+    self:_sync(player)
+    self:_notifyPlayer(player, "Полный сброс прогресса (/wipe)")
+    self._log:info("DevWipe:", player.UserId)
 end
 
 function DevCommands:_handleMaxUpgrade(player: Player, args: { string })
@@ -372,7 +464,7 @@ function DevCommands:_handleGrantProduct(player: Player, args: { string })
     end
     local key = args[1]
     if not key or key == "" then
-        self:_notifyPlayer(player, "Использование: /grantproduct <coinsSmall|coinsMedium|egg10> [N]")
+        self:_notifyPlayer(player, "Использование: /grantproduct <productKey> [N]")
         return
     end
     local n = tonumber(args[2]) or 1
@@ -458,7 +550,7 @@ end
 
 function DevCommands:_handleHelp(player: Player)
     self:_notifyPlayer(player,
-        "/coins [N], /reset, /maxlvl <id>, /skiptut, /rebirth [N], /daily, /setday +N, /resetdaily, /boost <мин>, /leaderboard refresh, /egg [N], /hatch, /pet <id>, /clearpets, /grantpass <key>, /grantproduct <key> [N], /discover <id>, /discoverall, /resetjournal, /resetquests, /completequest"
+        "/coins [N], /reset, /wipe, /maxlvl <id>, /skiptut, /rebirth [N], /daily, /setday +N, /resetdaily, /boost <мин>, /leaderboard refresh, /egg [N], /hatch, /pet <id>, /clearpets, /grantpass <key>, /grantproduct <key> [N], /discover <id>, /discoverall, /resetjournal, /resetquests, /completequest"
     )
 end
 
@@ -474,6 +566,8 @@ function DevCommands:_dispatch(player: Player, msg: string)
         self:_handleCoins(player, args)
     elseif cmd == "/reset" then
         self:_handleReset(player)
+    elseif cmd == "/wipe" then
+        self:_handleWipe(player)
     elseif cmd == "/maxlvl" then
         self:_handleMaxUpgrade(player, args)
     elseif cmd == "/skiptut" then

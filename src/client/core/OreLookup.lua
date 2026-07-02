@@ -11,6 +11,7 @@ local shared = ReplicatedStorage:WaitForChild("shared")
 
 local Constants = require(shared.constants)
 local OreDatabase = require(shared.data.OreDatabase)
+local OreAssets = require(shared.data.OreAssets)
 local OreTypes = require(shared.types.OreTypes)
 
 type OreDef = OreTypes.OreDef
@@ -56,10 +57,14 @@ end
 
 function OreLookup.getIcon(oreId: string): string
     local d = _byId[oreId]
-    if d and d.icon and d.icon ~= "" then
+    if d and d.icon and d.icon ~= "" and not string.find(d.icon, "rbxassetid://", 1, true) then
         return d.icon
     end
     return DEFAULT_ICON
+end
+
+function OreLookup.getImage(oreId: string): string
+    return OreAssets.image(oreId)
 end
 
 function OreLookup.getName(oreId: string): string

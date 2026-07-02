@@ -98,6 +98,15 @@ function MonetizationLogic.gamepassById(id: number): any?
     return nil
 end
 
+-- Reverse-lookup по внутреннему ключу (EggShopModal, DevCommands).
+function MonetizationLogic.productByKey(key: string): any?
+	local def = devproducts()[key]
+	if typeof(def) == "table" then
+		return def
+	end
+	return nil
+end
+
 -- Reverse-lookup по реальному DeveloperProduct ID (для ProcessReceipt).
 function MonetizationLogic.productById(id: number): any?
     for _, def in pairs(devproducts()) do
